@@ -1,0 +1,277 @@
+{
+  "scoping_statement": "Selected CITIGROUP GLOBAL MARKETS AUSTRALIA HOLDINGS PTY LIMITED Annual Financial Report 31 December 2024 because it provides clean, text-based disclosures with complete comparative-year columns (2024 vs 2023) and explicit note references.",
+  "statement_metadata": {
+    "company_name": "CITIGROUP GLOBAL MARKETS AUSTRALIA HOLDINGS PTY LIMITED",
+    "reporting_currency": "AUD",
+    "rounding_unit": "Millions ($Million)",
+    "raw_currency_presentation": "$Million"
+  },
+  "profit_and_loss": [
+    {
+      "label_raw": "Advisory fees",
+      "label_canonical": "advisory_fees",
+      "note_refs": ["3(a)"],
+      "page": 8,
+      "is_subtotal": false,
+      "extracted_data": {
+        "FY2024": { "parsed_value": 108.8, "raw_string": "108.8", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 101.6, "raw_string": "101.6", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Brokerage and other commissions",
+      "label_canonical": "brokerage_and_commissions",
+      "note_refs": ["3(b)"],
+      "page": 8,
+      "is_subtotal": false,
+      "extracted_data": {
+        "FY2024": { "parsed_value": 66.1, "raw_string": "66.1", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 52.3, "raw_string": "52.3", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Net trading income",
+      "label_canonical": "net_trading_income",
+      "note_refs": ["3(c)"],
+      "page": 8,
+      "is_subtotal": false,
+      "extracted_data": {
+        "FY2024": { "parsed_value": -4.3, "raw_string": "(4.3)", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 29.9, "raw_string": "29.9", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Interest income",
+      "label_canonical": "interest_income",
+      "note_refs": ["3(d)"],
+      "page": 8,
+      "is_subtotal": false,
+      "extracted_data": {
+        "FY2024": { "parsed_value": 529.6, "raw_string": "529.6", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 473.2, "raw_string": "473.2", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Interest expense",
+      "label_canonical": "interest_expense",
+      "note_refs": ["3(d)"],
+      "page": 8,
+      "is_subtotal": false,
+      "extracted_data": {
+        "FY2024": { "parsed_value": -580.8, "raw_string": "(580.8)", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": -521.1, "raw_string": "(521.1)", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Dividend income - trading securities",
+      "label_canonical": "dividend_income_trading",
+      "note_refs": ["3(e)"],
+      "page": 8,
+      "is_subtotal": false,
+      "extracted_data": {
+        "FY2024": { "parsed_value": 88.5, "raw_string": "88.5", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 197.4, "raw_string": "197.4", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Dividend expense - trading securities",
+      "label_canonical": "dividend_expense_trading",
+      "note_refs": ["3(e)"],
+      "page": 8,
+      "is_subtotal": false,
+      "extracted_data": {
+        "FY2024": { "parsed_value": -55.7, "raw_string": "(55.7)", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": -113.9, "raw_string": "(113.9)", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Management fee income",
+      "label_canonical": "management_fee_income",
+      "note_refs": ["26"],
+      "page": 8,
+      "is_subtotal": false,
+      "extracted_data": {
+        "FY2024": { "parsed_value": 23.7, "raw_string": "23.7", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 13.9, "raw_string": "13.9", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Total revenue, net of interest and dividend expenses",
+      "label_canonical": "total_revenue_net",
+      "note_refs": [],
+      "page": 8,
+      "is_subtotal": true,
+      "extracted_data": {
+        "FY2024": { "parsed_value": 175.9, "raw_string": "175.9", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 233.3, "raw_string": "233.3", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Management fees",
+      "label_canonical": "management_fees_expense",
+      "note_refs": ["26"],
+      "page": 8,
+      "is_subtotal": false,
+      "extracted_data": {
+        "FY2024": { "parsed_value": -84.3, "raw_string": "(84.3)", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": -103.0, "raw_string": "(103.0)", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Employee expenses",
+      "label_canonical": "employee_expenses",
+      "note_refs": [],
+      "page": 8,
+      "is_subtotal": false,
+      "extracted_data": {
+        "FY2024": { "parsed_value": -95.0, "raw_string": "(95.0)", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": -113.2, "raw_string": "(113.2)", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Brokerage and other clearing, settlement and exchange fees",
+      "label_canonical": "brokerage_and_clearing_fees",
+      "note_refs": [],
+      "page": 8,
+      "is_subtotal": false,
+      "extracted_data": {
+        "FY2024": { "parsed_value": -19.4, "raw_string": "(19.4)", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": -25.4, "raw_string": "(25.4)", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Impairment expense",
+      "label_canonical": "impairment_expense",
+      "note_refs": [],
+      "page": 8,
+      "is_subtotal": false,
+      "extracted_data": {
+        "FY2024": { "parsed_value": 0.1, "raw_string": "0.1", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 0.2, "raw_string": "0.2", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Other expenses",
+      "label_canonical": "other_expenses",
+      "note_refs": [],
+      "page": 8,
+      "is_subtotal": false,
+      "extracted_data": {
+        "FY2024": { "parsed_value": -20.0, "raw_string": "(20.0)", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": -19.5, "raw_string": "(19.5)", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Total expenses",
+      "label_canonical": "total_expenses",
+      "note_refs": [],
+      "page": 8,
+      "is_subtotal": true,
+      "extracted_data": {
+        "FY2024": { "parsed_value": -218.6, "raw_string": "(218.6)", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": -260.9, "raw_string": "(260.9)", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Loss before income tax",
+      "label_canonical": "loss_before_income_tax",
+      "note_refs": [],
+      "page": 8,
+      "is_subtotal": true,
+      "extracted_data": {
+        "FY2024": { "parsed_value": -42.7, "raw_string": "(42.7)", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": -27.6, "raw_string": "(27.6)", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Income tax benefit",
+      "label_canonical": "income_tax_benefit",
+      "note_refs": [],
+      "page": 8,
+      "is_subtotal": false,
+      "extracted_data": {
+        "FY2024": { "parsed_value": 12.4, "raw_string": "12.4", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 8.3, "raw_string": "8.3", "provenance_bbox": [] }
+      }
+    },
+    {
+      "label_raw": "Net loss attributable to members of the Company",
+      "label_canonical": "net_loss",
+      "note_refs": [],
+      "page": 8,
+      "is_subtotal": true,
+      "extracted_data": {
+        "FY2024": { "parsed_value": -30.3, "raw_string": "(30.3)", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": -19.3, "raw_string": "(19.3)", "provenance_bbox": [] }
+      }
+    }
+  ],
+  "targeted_balance_sheet": {
+    "total_assets": {
+      "note_refs": [],
+      "page": 9,
+      "extracted_data": {
+        "FY2024": { "parsed_value": 16483.6, "raw_string": "16,483.6", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 13684.9, "raw_string": "13,684.9", "provenance_bbox": [] }
+      }
+    },
+    "total_liabilities": {
+      "note_refs": [],
+      "page": 9,
+      "extracted_data": {
+        "FY2024": { "parsed_value": 16168.0, "raw_string": "16,168.0", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 13331.6, "raw_string": "13,331.6", "provenance_bbox": [] }
+      }
+    },
+    "total_equity": {
+      "note_refs": [],
+      "page": 9,
+      "extracted_data": {
+        "FY2024": { "parsed_value": 315.6, "raw_string": "315.6", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 353.3, "raw_string": "353.3", "provenance_bbox": [] }
+      }
+    },
+    "retained_earnings": {
+      "note_refs": [],
+      "page": 9,
+      "extracted_data": {
+        "FY2024": { "parsed_value": 112.4, "raw_string": "112.4", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 141.4, "raw_string": "141.4", "provenance_bbox": [] }
+      }
+    },
+    "parent_explicit_current_assets": {
+      "note_refs": ["31"],
+      "page": 37,
+      "extracted_data": {
+        "FY2024": { "parsed_value": 16.7, "raw_string": "16.7", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 16.4, "raw_string": "16.4", "provenance_bbox": [] }
+      }
+    },
+    "parent_explicit_current_liabilities": {
+      "note_refs": ["31"],
+      "page": 37,
+      "extracted_data": {
+        "FY2024": { "parsed_value": 1.9, "raw_string": "1.9", "provenance_bbox": [] },
+        "FY2023": { "parsed_value": 1.8, "raw_string": "1.8", "provenance_bbox": [] }
+      }
+    }
+  },
+  "derived_analytical_inputs": {
+    "comment": "Target fields derived programmatically to calibrate Phase 4 canonical normalization and Phase 7 mathematical engines.",
+    "operating_revenue_for_ratios": {
+      "methodology": "Advisory + Brokerage + Net Trading + Dividend Income/Expense + Management Fees (Excludes pure balancing Interbank Interest Income)",
+      "FY2024": 227.1,
+      "FY2023": 281.3
+    },
+    "ebit_operating_profit": {
+      "methodology": "Loss Before Tax - Interest Income + Interest Expense (Stripping financial balancing interest to isolate true institutional operating performance)",
+      "FY2024": 8.5,
+      "FY2023": 20.3
+    },
+    "working_capital_consolidated_proxy": {
+      "methodology": "Total Assets minus Deferred Tax Assets (Non-current) minus Total Liabilities minus Employee Provision Long-term element (5.0)",
+      "FY2024": 280.0,
+      "FY2023": 329.9
+    }
+  }
+}
