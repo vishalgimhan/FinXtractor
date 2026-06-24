@@ -4,7 +4,8 @@ import fitz
 
 from finxtractor.parsing.text import extract_pages
 from finxtractor.parsing.routing import rank_income_pages
-from finxtractor.parsing.parser import parse_income_statement
+# from finxtractor.parsing.parser import parse_income_statement
+from finxtractor.parsing.docling_parser import parse_income_statement
 
 app = typer.Typer()
 
@@ -18,13 +19,18 @@ def run(pdf: Path):
     doc.close()
 
 @app.command()
-def extract(pdf: Path):
-    """Parse one report's income statement into typed rows (JSON)."""
+def extract(
+    pdf: Path,
+    page: int = typer.Option(None, "--page", help="1-based page number of the income statement (auto-detected if omitted)")
+    ):
+    """Parse one report's income statement into typed rows with provenance (JSON)."""
     if not pdf.exists():
         raise typer.BadParameter(f"No file at {pdf}")
-    pages = extract_pages(pdf)
-    income = rank_income_pages(pages)
-    if not income:
-        raise typer.BadParameter("No income-statement page found")
-    stmt = parse_income_statement(pages, income[0], pdf.name)
+    if page is None:
+        ranked = rank_income_pages(extract_pages(pdf))
+        if not ranked:
+            raise typer.BadParameter("No income-statement page found; try --page")
+        page = ranked[0]
+        typer.echo(f"Auto-selected page {page} as most likely income-statement page")
+    stmt = parse_income_statement(pdf, page)
     typer.echo(stmt.model_dump_json(indent=2))
