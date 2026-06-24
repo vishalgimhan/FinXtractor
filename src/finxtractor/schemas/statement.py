@@ -3,6 +3,8 @@ from enum import Enum
 from typing import Optional
 from pydantic import BaseModel, Field
 
+from .note import NoteRef
+
 class Units(str, Enum):
     ACTUAL = "actual"
     THOUSANDS = "thousands"
@@ -19,8 +21,8 @@ class LineItem(BaseModel):
     label_canonical: Optional[str] = None                # filled by normalizer (later)
     value_current: Optional[float] = None                # current-year figure, signed
     value_prior: Optional[float] = None                  # comparative-year figure, signed
-    note_ref_raw: Optional[str] = None                   # raw cell, e.g. "4, 5"
-    note_refs: list[int] = Field(default_factory=list)   # parsed; filled by note-linker
+    note_ref_raw: Optional[str] = None                   # raw cell, e.g. "4, 5" or "3(a)"
+    note_refs: list[NoteRef] = Field(default_factory=list)   # parsed tokens, e.g. ["3(a)"]
     page: Optional[int] = None                           # 1-based source page
     is_subtotal: bool = False                            # marks total/subtotal rows
     provenance: Optional[Provenance] = None                 # filled by parser

@@ -8,6 +8,7 @@ from finxtractor.parsing.routing import resolve_income_page
 # from finxtractor.parsing.parser import parse_income_statement
 from finxtractor.parsing.docling_parser import parse_income_statement
 from finxtractor.parsing.vlm_fallback import extract_income_statement
+from finxtractor.parsing.notes import resolve_line_item_notes
 
 app = typer.Typer()
 
@@ -23,7 +24,7 @@ def run(pdf: Path):
 @app.command()
 def extract(
     pdf: Path,
-    page: int = typer.Option(None, "--page", help="1-based page number of the income statement (auto-detected if omitted)")
+    page: int | None = typer.Option(None, "--page", help="1-based page number of the income statement (auto-detected if omitted)")
     ):
     """Parse one report's income statement into typed rows with provenance (JSON)."""
     if not pdf.exists():
@@ -38,5 +39,6 @@ def extract(
     else:
         logger.info("Using explicit page {}", page)
     stmt = extract_income_statement(pdf, page)
+    resolve_line_item_notes(stmt)
     logger.debug("Finished extract for {} with {} line item(s)", pdf.name, len(stmt.line_items))
     typer.echo(stmt.model_dump_json(indent=2))

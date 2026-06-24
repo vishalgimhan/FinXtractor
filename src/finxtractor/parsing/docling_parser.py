@@ -16,7 +16,9 @@ _MONEY = re.compile(r"^\(?\$?\s?(?:\d{1,3}(?:,\d{3})+|\d{3,}|\d+\.\d+)\)?$")
 # comma-list, e.g. "4", "26", "3(a)", "3a", "5, 6", "3(a), 3(b)".
 _NOTE = re.compile(r"^\d{1,2}(?:\([a-z]\)|[a-z])?(?:\s*,\s*\d{1,2}(?:\([a-z]\)|[a-z])?)*$", re.I)
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
-_SKIP = ("year ended", "for the year", "annual report")
+# Caption/title rows to drop. Kept narrow: "for the year" alone would also
+# swallow real subtotals like "Total comprehensive loss for the year ...".
+_SKIP = ("year ended", "annual report")
 # Labels of total/subtotal rows. "total" plus the profit/loss result lines that
 # are subtotals even though they don't say "total".
 _SUBTOTAL_MARKERS = (
@@ -34,12 +36,6 @@ _SUBTOTAL_MARKERS = (
     "(loss)/profit",
     "total comprehensive",
 )
-
-def _parse_note_refs(note_raw: str | None) -> list[int]:
-    """Pull the note numbers out of a raw note cell, e.g. '3(a), 4' -> [3, 4]."""
-    if not note_raw:
-        return []
-    return [int(n) for n in re.findall(r"\d{1,2}", note_raw)]
 
 def table_confidence(stmt: Statement) -> float:
     """Cheap proxy for 'did TableFormer parse cleanly?' — 0.0 to 1.0."""
@@ -92,7 +88,74 @@ def _detect_years(df) -> tuple[int | None, int | None]:
     years = sorted({int(y) for y in _YEAR.findall(blob)}, reverse=True)
     return (years[0] if years else None, years[1] if len(years) > 1 else None)
 
-def _row_to_item(cells: list[str]) -> LineItem | None:
+ColumnRoles = tuple[list[int], int | None, list[int]]
+
+
+def _column_roles(df) -> ColumnRoles:
+    """Classify dataframe columns by their header into:
+    value columns (year-bearing, current-first), the note column, and label
+    columns. Returns ([] , None, []) when no year header is found."""
+    value_cols: list[tuple[int, int]] = []
+    note_col: int | None = None
+    label_cols: list[int] = []
+    for idx, name in enumerate(df.columns):
+        s = str(name)
+        ym = _YEAR.search(s)
+        if ym:
+            value_cols.append((idx, int(ym.group())))
+        elif "note" in s.lower():
+            note_col = idx
+        else:
+            label_cols.append(idx)
+    value_cols.sort(key=lambda t: t[1], reverse=True)  # current year first
+    return [i for i, _ in value_cols], note_col, label_cols
+
+
+def _make_item(label: str, vals: list[float | None], note_raw: str | None) -> LineItem:
+    low = label.lower()
+    return LineItem(
+        label_raw=label,
+        value_current=vals[0] if len(vals) > 0 else None,
+        value_prior=vals[1] if len(vals) > 1 else None,
+        note_ref_raw=note_raw,
+        is_subtotal=any(m in low for m in _SUBTOTAL_MARKERS),
+    )
+
+
+def _row_to_item(cells: list[str], roles: ColumnRoles) -> LineItem | None:
+    """Column-aware row parser. Reads values from the known year columns, so a
+    nil dash ('-') keeps the remaining figure in its correct year column.
+    Falls back to positional parsing when headers carry no year."""
+    value_cols, note_col, label_cols = roles
+    if not value_cols:
+        return _row_to_item_positional(cells)
+
+    cells = _clean(cells)
+    if any(s in " ".join(cells).lower() for s in _SKIP):
+        return None
+
+    vals = [
+        _to_float(cells[i]) if i < len(cells) and _MONEY.match(cells[i]) else None
+        for i in value_cols[:2]
+    ]
+    if all(v is None for v in vals):
+        return None  # section header / blank row
+
+    note_raw = None
+    if note_col is not None and note_col < len(cells):
+        c = cells[note_col]
+        if c and _NOTE.match(c):
+            note_raw = c
+
+    label = " ".join(cells[i] for i in label_cols if i < len(cells) and cells[i]).strip()
+    if not label:
+        return None
+    return _make_item(label, vals, note_raw)
+
+
+def _row_to_item_positional(cells: list[str]) -> LineItem | None:
+    """Fallback when the table has no year-bearing headers: take the rightmost
+    two money cells as the value columns."""
     cells = _clean(cells)
     if any(s in " ".join(cells).lower() for s in _SKIP):
         return None
@@ -116,16 +179,7 @@ def _row_to_item(cells: list[str]) -> LineItem | None:
     label = " ".join(label_parts).strip()
     if not label:
         return None
-
-    low = label.lower()
-    return LineItem(
-        label_raw=label,
-        value_current=vals[0],
-        value_prior=vals[1] if len(vals) > 1 else None,
-        note_ref_raw=note_raw,
-        note_refs=_parse_note_refs(note_raw),
-        is_subtotal=any(m in low for m in _SUBTOTAL_MARKERS),
-    )
+    return _make_item(label, vals, note_raw)
 
 def parse_income_statement(pdf: Path | str, page_number: int) -> Statement:
     pdf_path = Path(pdf)
@@ -142,6 +196,7 @@ def parse_income_statement(pdf: Path | str, page_number: int) -> Statement:
     logger.debug("Selected densest table from {} candidate(s)", len(doc.tables))
     df = table.export_to_dataframe()
     stmt.year_current, stmt.year_prior = _detect_years(df)
+    roles = _column_roles(df)
 
     page_text = next((p.text for p in extract_pages(pdf_path) if p.number == page_number), "")
     stmt.units = detect_units(page_text)
@@ -165,7 +220,7 @@ def parse_income_statement(pdf: Path | str, page_number: int) -> Statement:
     parsed_items = 0
     for _, row in df.iterrows():
         cells = row.tolist()
-        item = _row_to_item(cells)
+        item = _row_to_item(cells, roles)
         if item:
             item.page = page_number
             item.provenance = Provenance(
