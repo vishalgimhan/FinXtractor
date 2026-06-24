@@ -138,6 +138,58 @@ def income_page_from_printed_toc(pages: list[Page]) -> int | None:
     return None
 
 
+def _toc_note_listing(contents_text: str) -> dict[int, int]:
+    """Parse the notes listing in a printed contents page into
+    {note_number: printed_page}. The listing repeats number / title / page
+    triples; section group headers (non-numeric lines) are ignored.
+
+    Parsing starts after the 'Notes to ... financial statements' header so the
+    primary-statement page numbers above it don't collide with note numbers."""
+    lines = [ln.strip() for ln in contents_text.splitlines()]
+    start = 0
+    for i, ln in enumerate(lines):
+        low = ln.lower()
+        if "notes to" in low and "financial statements" in low:
+            start = i + 1
+    listing: dict[int, int] = {}
+    current: int | None = None
+    expecting_page = False
+    for ln in lines[start:]:
+        m = _STANDALONE_INT.match(ln)
+        if not m:
+            continue                      # title / section-header line
+        val = int(m.group(1))
+        if expecting_page:
+            if current is not None and current not in listing:
+                listing[current] = val    # this int is the printed page
+            current, expecting_page = None, False
+        else:
+            current, expecting_page = val, True  # this int is the note number
+    return listing
+
+
+def note_pages_from_toc(pages: list[Page], numbers: list[int]) -> dict[int, int]:
+    """Map each requested note number -> 1-based physical page, using the printed
+    contents listing plus the printed->physical offset. Only resolvable notes
+    are returned."""
+    contents = _find_contents_page(pages)
+    if contents is None:
+        return {}
+    listing = _toc_note_listing(contents.text)
+    offset = _page_offset(pages, contents)
+    if offset is None:
+        return {}
+    located: dict[int, int] = {}
+    for n in numbers:
+        printed = listing.get(n)
+        if printed is None:
+            continue
+        physical = printed + offset
+        if 1 <= physical <= len(pages):
+            located[n] = physical
+    return located
+
+
 def resolve_income_page(pdf: Path, pages: list[Page]) -> tuple[int | None, str | None]:
     """Locate the income-statement page, best source first:
     embedded outline -> printed contents page -> keyword heuristic.
