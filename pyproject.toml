@@ -12,7 +12,9 @@ dependencies = [
     "pydantic (>=2.13.4,<3.0.0)",
     "docling (>=2.106.0,<3.0.0)",
     "pandas (>=3.0.3,<4.0.0)",
-    "typer (>=0.12.5,<0.25.0)"
+    "loguru (>=0.7.3,<0.8.0)",
+    "typer (>=0.12.5,<0.25.0)",
+    "networkx (>=3.6.1,<4.0.0) ; python_version >= \"3.11\" and python_full_version != \"3.14.1\" and python_version < \"4.0\""
 ]
 
 [tool.poetry]
@@ -24,3 +26,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project.scripts]
 finxtractor = "finxtractor.cli:app"
+[dependency-groups]
+dev = [
+    "pytest (>=9.1.1,<10.0.0)"
+]
