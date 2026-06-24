@@ -1,9 +1,16 @@
+import sys
 from pathlib import Path
 import json
+import uuid
 
 import typer
 import fitz
 from loguru import logger
+
+# CLI emits UTF-8 (JSON may carry −, ⚠, accented names) even on cp1252 consoles.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
 
 from finxtractor.parsing.text import extract_pages
 from finxtractor.parsing.routing import resolve_income_page
@@ -12,12 +19,12 @@ from finxtractor.parsing.notes import resolve_line_item_notes
 from finxtractor.graph.builder import build_graph
 from finxtractor.graph.queries import drill_down, referencing_line_items
 from finxtractor.normalize.normalize import normalize, pull_balance_sheet, merge
-from finxtractor.normalize.normalize import normalize
-from finxtractor.normalize.balance_sheet import pull_balance_sheet, merge
 from finxtractor.validate.retry import validate_with_retry
 from finxtractor.validate.checks import run_all_checks
 from finxtractor.validate.confidence import score_statement
 from finxtractor.validate.hitl import build_report
+from finxtractor.orchestration.graph import compiled_pipeline
+from finxtractor.orchestration.orchestrator import orchestrate, DocSpec
 
 app = typer.Typer()
 
@@ -125,3 +132,43 @@ def validate(
     if report.flagged_count:
         typer.echo(f"\n⚠ {report.flagged_count} value(s) flagged for review", err=True)
         raise typer.Exit(code=1)            # non-zero exit = "needs a human"
+
+@app.command()
+def pipeline(
+    pdf: Path,
+    income_page: int = typer.Option(None, "--income-page"),
+    bs_page: int = typer.Option(None, "--bs-page"),
+    max_retries: int = typer.Option(2, "--max-retries"),
+):
+    """Run the full LangGraph pipeline for one report."""
+    ip = income_page or _resolved_page(pdf)
+    graph = compiled_pipeline()
+    config = {"configurable": {"thread_id": str(uuid.uuid4())}}
+    initial = {"pdf": str(pdf), "income_page": ip, "bs_page": bs_page,
+               "retries": 0, "max_retries": max_retries}
+
+    final = graph.invoke(initial, config)
+
+    typer.echo(f"route taken : {final.get('route')}")
+    typer.echo(f"retries     : {final.get('retries', 0)}")
+    typer.echo(f"flagged     : {final['report'].flagged_count}")
+    typer.echo(final["report"].model_dump_json(indent=2))
+    if final.get("route") == "hitl":
+        raise typer.Exit(code=1)
+
+@app.command("run-all")
+def run_all(max_retries: int = typer.Option(2, "--max-retries")):
+    """Run all four reports through the pipeline. Edit the specs to match your files."""
+    specs = [
+        DocSpec("data/reports/report1.pdf", income_page=__, bs_page=__),
+        DocSpec("data/reports/report2.pdf", income_page=__, bs_page=__),
+        DocSpec("data/reports/report3.pdf", income_page=__, bs_page=__),
+        DocSpec("data/reports/report4.pdf", income_page=__, bs_page=__),
+    ]
+    results = orchestrate(specs, max_retries)
+    typer.echo(f"\n{'REPORT':30} {'ROUTE':10} {'RETRIES':8} {'FLAGGED':8}")
+    for r in results:
+        typer.echo(f"{Path(r.pdf).name:30} {r.route:10} {r.retries:<8} {r.flagged:<8}"
+                   + (f"  ⚠ {r.error}" if r.error else ""))
+    if any(r.route in ("hitl", "error") for r in results):
+        raise typer.Exit(code=1)

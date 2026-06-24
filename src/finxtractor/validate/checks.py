@@ -30,6 +30,14 @@ def check_income_identity(stmt: CanonicalStatement, year: str = "current") -> Ch
         return CheckResult(name="income_identity", status=CheckStatus.SKIP,
                            accounts=["revenue", "net_profit"],
                            message="missing revenue or net profit")
+    # The identity is only meaningful when the full expense breakdown was
+    # canonicalized. Many statements (e.g. financial institutions, or a revenue
+    # line already reported net of interest) map only a sparse subset, which
+    # would make revenue - expenses != net spuriously. Skip rather than false-fail.
+    if cos is None and opex is None:
+        return CheckResult(name="income_identity", status=CheckStatus.SKIP,
+                           accounts=["revenue", "net_profit"],
+                           message="expense breakdown not canonicalized; skipping full identity")
 
     expenses = sum((x for x in (cos, opex, interest, tax) if x is not None), Decimal(0))
     expected = rev - expenses                      # expenses stored positive (Phase 4)
@@ -41,8 +49,33 @@ def check_income_identity(stmt: CanonicalStatement, year: str = "current") -> Ch
         expected=expected, actual=net, difference=diff, tolerance=tol,
         accounts=["revenue", "net_profit", "cost_of_sales",
                   "operating_expenses", "interest_expense", "income_tax_expense"],
-        message=(f"revenue {rev} − expenses {expenses} = {expected}, "
+        message=(f"revenue {rev} - expenses {expenses} = {expected}, "
                  f"but net profit = {net} (diff {diff}, tol {tol})"),
+    )
+
+
+def check_pretax_to_net(stmt: CanonicalStatement, year: str = "current") -> CheckResult:
+    """Pre-tax to net bridge: the gap between pre-tax and net profit should equal
+    the income-tax magnitude. Sign-agnostic, since tax is stored as a positive
+    magnitude (expense vs. benefit is ambiguous after that), so this holds for
+    both profit-makers and loss-makers with a tax benefit."""
+    pbt = _val(stmt, A.PROFIT_BEFORE_TAX, year)
+    tax = _val(stmt, A.INCOME_TAX_EXPENSE, year)
+    net = _val(stmt, A.NET_PROFIT, year)
+    if pbt is None or net is None or tax is None:
+        return CheckResult(name="pretax_to_net", status=CheckStatus.SKIP,
+                           accounts=["profit_before_tax", "income_tax_expense", "net_profit"],
+                           message="missing pre-tax, tax, or net profit")
+    gap = abs(net - pbt)
+    diff = gap - abs(tax)
+    tol = _tolerance(pbt, net)
+    status = CheckStatus.PASS if abs(diff) <= tol else CheckStatus.FAIL
+    return CheckResult(
+        name="pretax_to_net", status=status,
+        expected=abs(tax), actual=gap, difference=diff, tolerance=tol,
+        accounts=["profit_before_tax", "income_tax_expense", "net_profit"],
+        message=(f"|net {net} - pre-tax {pbt}| = {gap} vs tax magnitude {abs(tax)} "
+                 f"(diff {diff}, tol {tol})"),
     )
 
 def check_balance_identity(stmt: CanonicalStatement, year: str = "current") -> CheckResult:
@@ -89,6 +122,7 @@ def check_note_rollup(stmt: CanonicalStatement, total: A,
 def run_all_checks(stmt: CanonicalStatement, year: str = "current") -> list[CheckResult]:
     return [
         check_income_identity(stmt, year),
+        check_pretax_to_net(stmt, year),
         check_balance_identity(stmt, year),
         # add report-specific roll-ups here, e.g.:
         # check_note_rollup(stmt, A.GROSS_PROFIT, [A.REVENUE, A.COST_OF_SALES], year),
