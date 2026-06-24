@@ -7,27 +7,22 @@ from loguru import logger
 
 from finxtractor.parsing.text import extract_pages
 from finxtractor.parsing.routing import resolve_income_page
-# from finxtractor.parsing.parser import parse_income_statement
-from finxtractor.parsing.docling_parser import parse_income_statement
 from finxtractor.parsing.vlm_fallback import extract_income_statement
 from finxtractor.parsing.notes import resolve_line_item_notes
 from finxtractor.graph.builder import build_graph
 from finxtractor.graph.queries import drill_down, referencing_line_items
+from finxtractor.normalize.normalize import normalize, pull_balance_sheet, merge
 
 app = typer.Typer()
 
 def _resolved_page(pdf: Path) -> int:
-    from finxtractor.parsing.text import extract_pages
-    from finxtractor.parsing.routing import rank_income_pages
-    ranked = rank_income_pages(extract_pages(pdf))
-    if not ranked:
+    page, _source = resolve_income_page(pdf, extract_pages(pdf))
+    if page is None:
         raise typer.BadParameter("No income page found; pass --page")
-    return ranked[0]
+    return page
 
 
 def _build_statement(pdf: Path, page: int):
-    from finxtractor.parsing.vlm_fallback import extract_income_statement
-    from finxtractor.parsing.notes import resolve_line_item_notes
     stmt = extract_income_statement(pdf, page)
     resolve_line_item_notes(stmt)
     return stmt
@@ -78,3 +73,24 @@ def note_refs(pdf: Path, number: int, page: int = typer.Option(None, "--page")):
     stmt = _build_statement(pdf, page)
     G = build_graph(stmt, pdf)
     typer.echo(json.dumps(referencing_line_items(G, number), indent=2, default=str))
+
+@app.command()
+def canonical(pdf: Path, page: int = typer.Option(None, "--page")):
+    """Extract, map, and normalize one report's income statement to canonical form."""
+    page = page or _resolved_page(pdf)
+    stmt = _build_statement(pdf, page)
+    cs = normalize(stmt)
+    typer.echo(cs.model_dump_json(indent=2))
+
+@app.command("canonical-full")
+def canonical_full(
+    pdf: Path,
+    income_page: int = typer.Option(None, "--income-page"),
+    bs_page: int = typer.Option(None, "--bs-page"),
+):
+    """Full canonical pull: income statement + targeted balance-sheet items."""
+    ip = income_page or _resolved_page(pdf)
+    income = normalize(_build_statement(pdf, ip))
+    balance = pull_balance_sheet(pdf, bs_page)
+    full = merge(income, balance)
+    typer.echo(full.model_dump_json(indent=2))

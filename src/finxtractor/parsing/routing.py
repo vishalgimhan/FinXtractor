@@ -14,6 +14,12 @@ INCOME_MARKERS = [
     "income statement",
 ]
 
+BALANCE_SHEET_MARKERS = [
+    "statement of financial position",
+    "balance sheet",
+    "consolidated statement of financial position",
+]
+
 NOTES_MARKERS = [
     "notes to the financial statements",
     "notes to and forming part of",
@@ -52,6 +58,16 @@ def rank_income_pages(pages: list[Page]) -> list[int]:
     scored.sort(reverse=True)
     return [num for _, num in scored]
 
+def rank_balance_sheet_pages(pages: list[Page]) -> list[int]:
+    """Balance-sheet hits, best-first — same year+numeric-density tie-break as income."""
+    scored = []
+    for p in pages:
+        if not _matches(p.text, BALANCE_SHEET_MARKERS):
+            continue
+        score = (1 if _YEAR.search(p.text) else 0, len(_NUMBER.findall(p.text)))
+        scored.append((score, p.number))
+    scored.sort(reverse=True)
+    return [num for _, num in scored]
 
 # --- table-of-contents based routing ---------------------------------------
 
@@ -204,3 +220,5 @@ def resolve_income_page(pdf: Path, pages: list[Page]) -> tuple[int | None, str |
     if ranked:
         return ranked[0], "heuristic"
     return None, None
+
+

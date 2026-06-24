@@ -1,0 +1,27 @@
+from ..schemas.canonical import CanonicalAccount as A
+
+# Canonical account -> the raw labels companies actually print for it.
+# Lowercased; matching normalizes both sides.
+ALIASES: dict[A, list[str]] = {
+    A.REVENUE: ["revenue", "sales revenue", "total income", "total revenue",
+                "revenue from contracts with customers", "sales"],
+    A.COST_OF_SALES: ["cost of sales", "cost of goods sold", "cost of revenue"],
+    A.GROSS_PROFIT: ["gross profit", "gross margin"],
+    A.EBIT: ["operating profit", "profit from operations", "ebit",
+             "earnings before interest and tax", "operating income"],
+    A.INTEREST_EXPENSE: ["interest expense", "finance costs", "finance expense",
+                         "borrowing costs"],
+    A.PROFIT_BEFORE_TAX: ["profit before tax", "profit before income tax",
+                          "profit before taxation"],
+    A.INCOME_TAX_EXPENSE: ["income tax expense", "tax expense", "income tax"],
+    A.NET_PROFIT: ["net profit", "profit for the year", "net income",
+                   "profit attributable to members", "total comprehensive income"],
+    A.CURRENT_ASSETS: ["total current assets", "current assets"],
+    A.TOTAL_ASSETS: ["total assets"],
+    A.CURRENT_LIABILITIES: ["total current liabilities", "current liabilities"],
+    A.TOTAL_LIABILITIES: ["total liabilities"],
+    A.TOTAL_EQUITY: ["total equity", "total shareholders equity",
+                     "total members funds", "net assets", "total equity and reserves"],
+    A.RETAINED_EARNINGS: ["retained earnings", "retained profits",
+                          "accumulated profits", "accumulated losses"],
+}
