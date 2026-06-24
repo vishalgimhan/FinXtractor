@@ -1,11 +1,17 @@
 import re
+from collections import Counter
+from pathlib import Path
+
+import fitz
+
 from .text import Page
 
 INCOME_MARKERS = [
+    "statement of profit or loss",
     "statement of profit",
-    "consolidated statement of financial income",
     "statement of comprehensive income",
     "statement of financial performance",
+    "income statement",
 ]
 
 NOTES_MARKERS = [
@@ -15,16 +21,22 @@ NOTES_MARKERS = [
 
 _YEAR = re.compile(r"\b(19|20)\d{2}\b")
 _NUMBER = re.compile(r"\$|\d[\d,]{2,}")
+# A line that is nothing but a small integer (a printed page number, not a year).
+_STANDALONE_INT = re.compile(r"^\s*(\d{1,3})\s*$")
+
 
 def _matches(text: str, markers: list[str]) -> bool:
     low = text.lower()
     return any(m in low for m in markers)
 
+
 def find_income_pages(pages: list[Page]) -> list[int]:
     return [p.number for p in pages if _matches(p.text, INCOME_MARKERS)]
 
+
 def find_notes_pages(pages: list[Page]) -> list[int]:
     return [p.number for p in pages if _matches(p.text, NOTES_MARKERS)]
+
 
 def rank_income_pages(pages: list[Page]) -> list[int]:
     """Income hits, best-first: prefer pages that also look like a real table
@@ -39,3 +51,104 @@ def rank_income_pages(pages: list[Page]) -> list[int]:
         scored.append((score, p.number))
     scored.sort(reverse=True)
     return [num for _, num in scored]
+
+
+# --- table-of-contents based routing ---------------------------------------
+
+def income_page_from_outline(pdf: Path) -> int | None:
+    """Use the PDF's embedded outline/bookmarks (most reliable when present).
+
+    Returns the 1-based physical page of the income statement, or None if the
+    PDF has no outline or no matching entry.
+    """
+    doc = fitz.open(pdf)
+    try:
+        toc = doc.get_toc()  # list of [level, title, page]; page is 1-based physical
+    finally:
+        doc.close()
+    for _level, title, page in toc:
+        if page >= 1 and _matches(title, INCOME_MARKERS):
+            return page
+    return None
+
+
+def _find_contents_page(pages: list[Page]) -> Page | None:
+    for p in pages:
+        low = p.text.lower()
+        if "table of contents" in low or ("contents" in low and "page" in low):
+            return p
+    return None
+
+
+def _printed_toc_entry_page(text: str, markers: list[str]) -> int | None:
+    """In a printed contents listing, find the page number that follows the
+    first line matching one of the markers."""
+    lines = [ln.strip() for ln in text.splitlines()]
+    for i, line in enumerate(lines):
+        if line and _matches(line, markers):
+            for nxt in lines[i + 1:]:
+                m = _STANDALONE_INT.match(nxt)
+                if m:
+                    return int(m.group(1))
+    return None
+
+
+def _printed_page_number(text: str) -> int | None:
+    """Best guess of a page's *printed* page number: the last standalone
+    small-integer line (typically the footer)."""
+    candidate = None
+    for line in text.splitlines():
+        m = _STANDALONE_INT.match(line)
+        if m:
+            candidate = int(m.group(1))
+    return candidate
+
+
+def _page_offset(pages: list[Page], contents: Page | None) -> int | None:
+    """Offset between physical PDF page index and printed page number, taken as
+    the most common (physical - printed) across pages. The contents page is
+    skipped because its listing is full of stray page numbers."""
+    offsets: Counter[int] = Counter()
+    for p in pages:
+        if contents is not None and p.number == contents.number:
+            continue
+        printed = _printed_page_number(p.text)
+        if printed is not None and 0 < printed <= len(pages):
+            offsets[p.number - printed] += 1
+    if not offsets:
+        return None
+    return offsets.most_common(1)[0][0]
+
+
+def income_page_from_printed_toc(pages: list[Page]) -> int | None:
+    """Parse a printed 'Contents' page, then map the listed (printed) page
+    number to a physical PDF page index. Returns 1-based physical page or None."""
+    contents = _find_contents_page(pages)
+    if contents is None:
+        return None
+    printed_target = _printed_toc_entry_page(contents.text, INCOME_MARKERS)
+    if printed_target is None:
+        return None
+    offset = _page_offset(pages, contents)
+    if offset is None:
+        return None
+    physical = printed_target + offset
+    if 1 <= physical <= len(pages):
+        return physical
+    return None
+
+
+def resolve_income_page(pdf: Path, pages: list[Page]) -> tuple[int | None, str | None]:
+    """Locate the income-statement page, best source first:
+    embedded outline -> printed contents page -> keyword heuristic.
+    Returns (1-based page, source) or (None, None)."""
+    page = income_page_from_outline(pdf)
+    if page is not None:
+        return page, "outline"
+    page = income_page_from_printed_toc(pages)
+    if page is not None:
+        return page, "printed_toc"
+    ranked = rank_income_pages(pages)
+    if ranked:
+        return ranked[0], "heuristic"
+    return None, None
