@@ -10,8 +10,12 @@ from ..schemas import LineItem, Statement, Provenance
 from .units import detect_units, detect_currency, detect_sign_convention
 from .text import extract_pages
 
-# Strict money cell: thousands-grouped, 3+ digit integer, or decimal; parens = negative.
-_MONEY = re.compile(r"^\(?\$?\s?(?:\d{1,3}(?:,\d{3})+|\d{3,}|\d+\.\d+)\)?$")
+# Strict money cell: thousands-grouped (optional decimal), 3+ digit integer
+# (optional decimal), or a plain decimal; parens = negative. A bare 1-2 digit
+# integer is NOT money (those are note numbers).
+_MONEY = re.compile(
+    r"^\(?\$?\s?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d{3,}(?:\.\d+)?|\d+\.\d+)\)?$"
+)
 # Note reference: a small integer, optionally with a letter sub-part, as a
 # comma-list, e.g. "4", "26", "3(a)", "3a", "5, 6", "3(a), 3(b)".
 _NOTE = re.compile(r"^\d{1,2}(?:\([a-z]\)|[a-z])?(?:\s*,\s*\d{1,2}(?:\([a-z]\)|[a-z])?)*$", re.I)
@@ -181,6 +185,63 @@ def _row_to_item_positional(cells: list[str]) -> LineItem | None:
         return None
     return _make_item(label, vals, note_raw)
 
+def _table_to_items(table, page_number: int) -> list[LineItem]:
+    """Parse one Docling table's rows into LineItems with provenance."""
+    df = table.export_to_dataframe()
+    roles = _column_roles(df)
+    prov_bbox = None
+    if table.prov:
+        b = table.prov[0].bbox
+        prov_bbox = (b.l, b.t, b.r, b.b)             # four floats, per schema
+    items: list[LineItem] = []
+    for _, row in df.iterrows():
+        cells = row.tolist()
+        item = _row_to_item(cells, roles)
+        if item:
+            item.page = page_number
+            item.provenance = Provenance(
+                page=page_number, bbox=prov_bbox,
+                raw_cell_text=" | ".join(c for c in _clean(cells) if c),
+            )
+            items.append(item)
+    return items
+
+
+def _apply_context(stmt: Statement, pdf_path: Path, page_number: int, df) -> None:
+    """Fill years (from the table) and units/currency/sign (from the page text)."""
+    stmt.year_current, stmt.year_prior = _detect_years(df)
+    page_text = next((p.text for p in extract_pages(pdf_path) if p.number == page_number), "")
+    stmt.units = detect_units(page_text)
+    stmt.currency = detect_currency(page_text)
+    stmt.sign_convention = detect_sign_convention(page_text)
+    logger.info(
+        "Detected context for {} page {}: year_current={}, year_prior={}, units={}, currency={}, sign_convention={}",
+        pdf_path.name, page_number, stmt.year_current, stmt.year_prior,
+        stmt.units, stmt.currency, stmt.sign_convention,
+    )
+
+
+def parse_all_tables(pdf: Path | str, page_number: int) -> Statement:
+    """Aggregate rows from EVERY table on the page (not just the densest). Used
+    for the balance sheet, where the totals can live in a different table than
+    the densest one."""
+    pdf_path = Path(pdf)
+    logger.info("Parsing all tables from {} page {}", pdf_path.name, page_number)
+    result = _build_converter().convert(str(pdf), page_range=(page_number, page_number))
+    doc = result.document
+    stmt = Statement(source_pdf=pdf_path.name, statement_pages=[page_number])
+    if not doc.tables:
+        logger.warning("No tables found on page {}; returning empty statement", page_number)
+        return stmt
+    densest = max(doc.tables, key=_numeric_density)
+    _apply_context(stmt, pdf_path, page_number, densest.export_to_dataframe())
+    for table in doc.tables:
+        stmt.line_items.extend(_table_to_items(table, page_number))
+    logger.info("Parsed {} line item(s) from {} table(s) on page {}",
+                len(stmt.line_items), len(doc.tables), page_number)
+    return stmt
+
+
 def parse_income_statement(pdf: Path | str, page_number: int) -> Statement:
     pdf_path = Path(pdf)
     logger.info("Parsing income statement from {} page {}", pdf_path.name, page_number)
@@ -194,42 +255,9 @@ def parse_income_statement(pdf: Path | str, page_number: int) -> Statement:
 
     table = max(doc.tables, key=_numeric_density)    # densest table on the page
     logger.debug("Selected densest table from {} candidate(s)", len(doc.tables))
-    df = table.export_to_dataframe()
-    stmt.year_current, stmt.year_prior = _detect_years(df)
-    roles = _column_roles(df)
-
-    page_text = next((p.text for p in extract_pages(pdf_path) if p.number == page_number), "")
-    stmt.units = detect_units(page_text)
-    stmt.currency = detect_currency(page_text)
-    stmt.sign_convention = detect_sign_convention(page_text)
-    logger.info(
-        "Detected context for {} page {}: year_current={}, year_prior={}, units={}, currency={}, sign_convention={}",
-        pdf_path.name,
-        page_number,
-        stmt.year_current,
-        stmt.year_prior,
-        stmt.units,
-        stmt.currency,
-        stmt.sign_convention,
-    )
-    prov_bbox = None
-    if table.prov:
-        b = table.prov[0].bbox
-        prov_bbox = (b.l, b.t, b.r, b.b)             # four floats, per schema
-
-    parsed_items = 0
-    for _, row in df.iterrows():
-        cells = row.tolist()
-        item = _row_to_item(cells, roles)
-        if item:
-            item.page = page_number
-            item.provenance = Provenance(
-                page=page_number,
-                bbox=prov_bbox,
-                raw_cell_text=" | ".join(c for c in _clean(cells) if c),
-            )
-            stmt.line_items.append(item)
-            parsed_items += 1
-    logger.info("Parsed {} line item(s) from {} page {}", parsed_items, pdf_path.name, page_number)
+    _apply_context(stmt, pdf_path, page_number, table.export_to_dataframe())
+    stmt.line_items.extend(_table_to_items(table, page_number))
+    logger.info("Parsed {} line item(s) from {} page {}",
+                len(stmt.line_items), pdf_path.name, page_number)
     return stmt
 

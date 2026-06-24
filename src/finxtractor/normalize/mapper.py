@@ -38,7 +38,7 @@ def match_exact(label: str) -> CanonicalAccount | None:
     return _LABEL_TO_ACCOUNT.get(_norm(label))
 
 
-def match_fuzzy(label: str, threshold: int = 88) -> tuple[CanonicalAccount | None, float]:
+def match_fuzzy(label: str, threshold: int = 92) -> tuple[CanonicalAccount | None, float]:
     hit = process.extractOne(_norm(label), _ALL_LABELS, scorer=fuzz.token_sort_ratio)
     if hit and hit[1] >= threshold:
         return _LABEL_TO_ACCOUNT[hit[0]], hit[1]

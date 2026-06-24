@@ -1,0 +1,95 @@
+from decimal import Decimal
+from ..schemas.canonical import CanonicalAccount as A, CanonicalStatement
+from .results import CheckResult, CheckStatus
+
+# Relative slack for rounding: 0.5% of the larger magnitude, floored at a small absolute.
+_REL = Decimal("0.005")
+_ABS_FLOOR = Decimal("1000")     # absolute units; ~one rounding step in $'000 reports
+
+
+def _tolerance(*values: Decimal) -> Decimal:
+    mag = max((abs(v) for v in values if v is not None), default=Decimal(0))
+    return max(mag * _REL, _ABS_FLOOR)
+
+#Value fetcher
+def _val(stmt: CanonicalStatement, account: A, year: str = "current") -> Decimal | None:
+    line = stmt.get(account)
+    if line is None:
+        return None
+    return getattr(line, f"value_{year}")
+
+def check_income_identity(stmt: CanonicalStatement, year: str = "current") -> CheckResult:
+    rev = _val(stmt, A.REVENUE, year)
+    cos = _val(stmt, A.COST_OF_SALES, year)
+    opex = _val(stmt, A.OPERATING_EXPENSES, year)
+    interest = _val(stmt, A.INTEREST_EXPENSE, year)
+    tax = _val(stmt, A.INCOME_TAX_EXPENSE, year)
+    net = _val(stmt, A.NET_PROFIT, year)
+
+    if rev is None or net is None:
+        return CheckResult(name="income_identity", status=CheckStatus.SKIP,
+                           accounts=["revenue", "net_profit"],
+                           message="missing revenue or net profit")
+
+    expenses = sum((x for x in (cos, opex, interest, tax) if x is not None), Decimal(0))
+    expected = rev - expenses                      # expenses stored positive (Phase 4)
+    diff = net - expected
+    tol = _tolerance(rev, net)
+    status = CheckStatus.PASS if abs(diff) <= tol else CheckStatus.FAIL
+    return CheckResult(
+        name="income_identity", status=status,
+        expected=expected, actual=net, difference=diff, tolerance=tol,
+        accounts=["revenue", "net_profit", "cost_of_sales",
+                  "operating_expenses", "interest_expense", "income_tax_expense"],
+        message=(f"revenue {rev} − expenses {expenses} = {expected}, "
+                 f"but net profit = {net} (diff {diff}, tol {tol})"),
+    )
+
+def check_balance_identity(stmt: CanonicalStatement, year: str = "current") -> CheckResult:
+    assets = _val(stmt, A.TOTAL_ASSETS, year)
+    liabilities = _val(stmt, A.TOTAL_LIABILITIES, year)
+    equity = _val(stmt, A.TOTAL_EQUITY, year)
+
+    if assets is None or liabilities is None or equity is None:
+        return CheckResult(name="balance_identity", status=CheckStatus.SKIP,
+                           accounts=["total_assets", "total_liabilities", "total_equity"],
+                           message="missing a balance-sheet total")
+
+    expected = liabilities + equity
+    diff = assets - expected
+    tol = _tolerance(assets)
+    status = CheckStatus.PASS if abs(diff) <= tol else CheckStatus.FAIL
+    return CheckResult(
+        name="balance_identity", status=status,
+        expected=expected, actual=assets, difference=diff, tolerance=tol,
+        accounts=["total_assets", "total_liabilities", "total_equity"],
+        message=f"assets {assets} vs liabilities+equity {expected} (diff {diff}, tol {tol})",
+    )
+
+# subtotal roll-up check
+def check_note_rollup(stmt: CanonicalStatement, total: A,
+                      components: list[A], year: str = "current") -> CheckResult:
+    total_v = _val(stmt, total, year)
+    parts = [(_val(stmt, c, year)) for c in components]
+    present = [p for p in parts if p is not None]
+    if total_v is None or not present:
+        return CheckResult(name=f"rollup_{total.value}", status=CheckStatus.SKIP,
+                           accounts=[total.value], message="missing total or components")
+    summed = sum(present, Decimal(0))
+    diff = total_v - summed
+    tol = _tolerance(total_v)
+    status = CheckStatus.PASS if abs(diff) <= tol else CheckStatus.FAIL
+    return CheckResult(
+        name=f"rollup_{total.value}", status=status,
+        expected=summed, actual=total_v, difference=diff, tolerance=tol,
+        accounts=[total.value] + [c.value for c in components],
+        message=f"{total.value} {total_v} vs components {summed} (diff {diff}, tol {tol})",
+    )
+
+def run_all_checks(stmt: CanonicalStatement, year: str = "current") -> list[CheckResult]:
+    return [
+        check_income_identity(stmt, year),
+        check_balance_identity(stmt, year),
+        # add report-specific roll-ups here, e.g.:
+        # check_note_rollup(stmt, A.GROSS_PROFIT, [A.REVENUE, A.COST_OF_SALES], year),
+    ]
