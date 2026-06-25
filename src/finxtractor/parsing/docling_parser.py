@@ -7,6 +7,7 @@ from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 
 from ..schemas import LineItem, Statement, Provenance
+from ..config import get_param
 from .units import detect_units, detect_currency, detect_sign_convention
 from .text import extract_pages
 
@@ -54,10 +55,12 @@ def table_confidence(stmt: Statement) -> float:
         
 # Docling Table Structure Recognizer
 def _build_converter() -> DocumentConverter:
-    logger.debug("Building docling PDF converter with table structure enabled")
+    mode = get_param("parsing", "table_former_mode", default="ACCURATE")
+    do_ocr = get_param("parsing", "do_ocr", default=False)
+    logger.debug("Building docling PDF converter (mode={}, do_ocr={})", mode, do_ocr)
     opts = PdfPipelineOptions(do_table_structure=True)
-    opts.table_structure_options.mode = TableFormerMode.ACCURATE # ACCURATE | FAST
-    opts.do_ocr = False  # text-based reports; OCR off for speed
+    opts.table_structure_options.mode = TableFormerMode[mode]  # ACCURATE | FAST
+    opts.do_ocr = do_ocr
     return DocumentConverter(
         format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}
     )

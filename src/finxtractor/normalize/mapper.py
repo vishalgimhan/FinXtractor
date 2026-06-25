@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from rapidfuzz import process, fuzz
 
+from ..config import get_param
 from ..schemas.canonical import CanonicalAccount
 from .aliases import ALIASES
 
@@ -38,7 +39,9 @@ def match_exact(label: str) -> CanonicalAccount | None:
     return _LABEL_TO_ACCOUNT.get(_norm(label))
 
 
-def match_fuzzy(label: str, threshold: int = 92) -> tuple[CanonicalAccount | None, float]:
+def match_fuzzy(label: str, threshold: int | None = None) -> tuple[CanonicalAccount | None, float]:
+    if threshold is None:
+        threshold = get_param("normalize", "fuzzy_threshold", default=92)
     hit = process.extractOne(_norm(label), _ALL_LABELS, scorer=fuzz.token_sort_ratio)
     if hit and hit[1] >= threshold:
         return _LABEL_TO_ACCOUNT[hit[0]], hit[1]

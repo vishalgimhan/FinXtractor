@@ -1,15 +1,16 @@
 from decimal import Decimal
+from ..config import get_param
 from ..schemas.canonical import CanonicalAccount as A, CanonicalStatement
 from .results import CheckResult, CheckStatus
 
-# Relative slack for rounding: 0.5% of the larger magnitude, floored at a small absolute.
-_REL = Decimal("0.005")
-_ABS_FLOOR = Decimal("1000")     # absolute units; ~one rounding step in $'000 reports
-
 
 def _tolerance(*values: Decimal) -> Decimal:
+    # Relative slack for rounding (default 0.5% of the larger magnitude), floored
+    # at a small absolute. Both come from config/param.yaml (validation.*).
+    rel = Decimal(str(get_param("validation", "rel_tolerance", default=0.005)))
+    floor = Decimal(str(get_param("validation", "abs_tolerance_floor", default=1000)))
     mag = max((abs(v) for v in values if v is not None), default=Decimal(0))
-    return max(mag * _REL, _ABS_FLOOR)
+    return max(mag * rel, floor)
 
 #Value fetcher
 def _val(stmt: CanonicalStatement, account: A, year: str = "current") -> Decimal | None:

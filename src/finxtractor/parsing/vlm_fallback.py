@@ -1,8 +1,7 @@
 from pathlib import Path
+from ..config import get_param
 from ..schemas import Statement
 from .docling_parser import parse_income_statement, table_confidence
-
-CONFIDENCE_FLOOR = 0.0  # STUB: set >0 (e.g. 0.6) to actually arm the fallback
 
 # Vision model for the fallback route.
 VLM_MODEL = "granite-docling"
@@ -17,6 +16,7 @@ def extract_income_statement(pdf: Path | str, page_number: int) -> Statement:
     """Primary route with VLM fallback on low confidence."""
     stmt = parse_income_statement(pdf, page_number)
     score = table_confidence(stmt)
-    if score < CONFIDENCE_FLOOR:
+    floor = get_param("vlm", "confidence_floor", default=0.0)  # >0 arms the fallback
+    if score < floor:
         return extract_with_vlm(pdf, page_number)
     return stmt

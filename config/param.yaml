@@ -1,0 +1,23 @@
+# Project-wide tunable parameters. Read via finxtractor.config.get_param(...).
+
+parsing:
+  table_former_mode: ACCURATE   # ACCURATE | FAST  (Docling TableFormer)
+  do_ocr: false                 # text-based reports; OCR off for speed
+
+normalize:
+  fuzzy_threshold: 92           # rapidfuzz token_sort_ratio cutoff (0-100)
+  use_llm: false                # default state of the LLM mapping tier
+
+validation:
+  max_retries: 2
+  review_threshold: 0.60        # HITL flags values below this confidence
+  rel_tolerance: 0.005          # cross-foot slack: 0.5% of magnitude
+  abs_tolerance_floor: 1000     # cross-foot slack: absolute floor (actual units)
+  confidence_base:              # base confidence by extraction source
+    tableformer: 0.80
+    vlm: 0.65
+    llm_mapped: 0.70
+    default: 0.60
+
+vlm:
+  confidence_floor: 0.0         # >0 arms the VLM fallback

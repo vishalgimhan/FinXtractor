@@ -1,10 +1,13 @@
 from pathlib import Path
 from decimal import Decimal
 
+from loguru import logger
+
 from ..schemas.canonical import CanonicalStatement, CanonicalAccount
 from .checks import run_all_checks
 from .results import CheckResult, CheckStatus
 
+from ..config import get_param
 from ..parsing.docling_parser import parse_income_statement
 from ..normalize.normalize import normalize, pull_balance_sheet, merge
 
@@ -29,12 +32,17 @@ def _reextract(pdf: Path | str, region: str, income_page: int,
     """Second attempt at the failing region. A real retry should *change something* —
     e.g. ACCURATE TableFormer mode, or the VLM fork once armed — not just repeat."""
     if region == "balance":
+        logger.info("Retrying balance-sheet extraction for {}", pdf)
         return pull_balance_sheet(pdf, bs_page)
+    logger.info("Retrying income-statement extraction for {} page {}", pdf, income_page)
     return normalize(parse_income_statement(pdf, income_page))
 
 def validate_with_retry(pdf: Path | str, stmt: CanonicalStatement,
                         income_page: int, bs_page: int | None = None,
-                        max_retries: int = 2) -> tuple[CanonicalStatement, list[CheckResult], int]:
+                        max_retries: int | None = None) -> tuple[CanonicalStatement, list[CheckResult], int]:
+    if max_retries is None:
+        max_retries = get_param("validation", "max_retries", default=2)
+    logger.info("Validating {} with up to {} retry(ies)", pdf, max_retries)
     checks = run_all_checks(stmt)
     retries = 0
     while retries < max_retries:
@@ -43,13 +51,17 @@ def validate_with_retry(pdf: Path | str, stmt: CanonicalStatement,
             break
         retries += 1
         region = _failing_region(failed)
+        logger.warning("Validation failed in {} region; retry {} of {}", region, retries, max_retries)
         candidate = _reextract(pdf, region, income_page, bs_page)
         candidate = merge(stmt, candidate) if region == "balance" else \
                     merge(candidate, stmt)
         new_checks = run_all_checks(candidate)
         new_failed = sum(1 for c in new_checks if c.status == CheckStatus.FAIL)
         if new_failed < len(failed):          # only accept a genuine improvement
+            logger.info("Retry improved validation from {} failures to {}", len(failed), new_failed)
             stmt, checks = candidate, new_checks
         else:
+            logger.info("Retry did not improve validation; stopping")
             break                              # no improvement -> stop, let HITL handle it
+    logger.info("Validation complete for {} after {} retry(ies)", pdf, retries)
     return stmt, checks, retries

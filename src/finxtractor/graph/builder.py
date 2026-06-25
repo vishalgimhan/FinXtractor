@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import networkx as nx
 from networkx.readwrite import json_graph
+from loguru import logger
 
 from ..schemas import Statement
 from ..parsing.note_tables import collect_note_tables
@@ -46,10 +47,13 @@ def _add_notes(G: nx.DiGraph, stmt: Statement, note_tables: dict) -> None:
 
 # Orchestrator
 def build_graph(stmt: Statement, pdf: Path | str) -> nx.DiGraph:
+    logger.info("Building graph for {} with {} line item(s)", pdf, len(stmt.line_items))
     G = nx.DiGraph()
     note_tables = collect_note_tables(stmt, pdf)
+    logger.debug("Collected {} note table(s) for graph build", len(note_tables))
     _add_line_items(G, stmt)
     _add_notes(G, stmt, note_tables)
+    logger.info("Built graph with {} node(s) and {} edge(s)", G.number_of_nodes(), G.number_of_edges())
     return G
 
 def graph_to_json(G: nx.DiGraph) -> str:

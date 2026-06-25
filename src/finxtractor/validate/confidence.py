@@ -1,17 +1,20 @@
+from ..config import get_param
 from ..schemas.canonical import CanonicalStatement
 from .results import CheckResult, CheckStatus, ValueConfidence
 
 # How much we trust a value before any checks, by how it was produced.
-_BASE = {
+# In-code defaults; config/param.yaml (validation.confidence_base) overrides.
+_BASE_DEFAULTS = {
     "tableformer": 0.80,    # deterministic, structure-aware
     "vlm": 0.65,            # vision fallback — less certain
     "llm_mapped": 0.70,     # value extracted fine; only the label was LLM-mapped
+    "default": 0.60,
 }
-_DEFAULT_BASE = 0.60
 
 
 def _base_score(source: str) -> float:
-    return _BASE.get(source, _DEFAULT_BASE)
+    base = {**_BASE_DEFAULTS, **(get_param("validation", "confidence_base", default={}) or {})}
+    return base.get(source, base["default"])
 
 def _source_for(line) -> str:
     if line.mapped_by == "llm":

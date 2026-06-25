@@ -1,4 +1,4 @@
-from .config import load_active_provider, get_env
+from ..config import load_active_provider, get_env
 
 
 def get_chat_model():

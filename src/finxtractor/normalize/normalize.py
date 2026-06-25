@@ -67,6 +67,7 @@ def _resolve_account(
 
 
 def normalize(stmt: Statement, use_llm: bool = False) -> CanonicalStatement:
+    logger.info("Normalizing {} line item(s) from {} (llm={})", len(stmt.line_items), stmt.source_pdf, use_llm)
     cs = CanonicalStatement(
         source_pdf=stmt.source_pdf,
         year_current=stmt.year_current,
@@ -96,6 +97,7 @@ def normalize(stmt: Statement, use_llm: bool = False) -> CanonicalStatement:
             source_labels=[item.label_raw], mapped_by=method,
         )
         from_subtotal[key] = item.is_subtotal
+    logger.info("Normalization produced {} canonical line(s) for {}", len(cs.lines), stmt.source_pdf)
     return cs
 
 
@@ -103,10 +105,12 @@ def normalize(stmt: Statement, use_llm: bool = False) -> CanonicalStatement:
 
 def _bs_page(pdf: Path | str, override: int | None) -> int:
     if override:
+        logger.info("Using explicit balance-sheet page {}", override)
         return override
     ranked = rank_balance_sheet_pages(extract_pages(pdf))
     if not ranked:
         raise ValueError("No balance-sheet page found; pass an explicit page")
+    logger.info("Resolved balance-sheet page {}", ranked[0])
     return ranked[0]
 
 
@@ -116,7 +120,9 @@ def pull_balance_sheet(
     """Targeted balance-sheet pull: parse ALL tables on the BS page and normalize,
     picking up current/total assets, liabilities, equity, retained earnings even
     when the totals sit in a different table than the densest one."""
-    stmt = parse_all_tables(pdf, _bs_page(pdf, page))
+    bs_page = _bs_page(pdf, page)
+    logger.info("Pulling balance sheet from {} page {} (llm={})", pdf, bs_page, use_llm)
+    stmt = parse_all_tables(pdf, bs_page)
     return normalize(stmt, use_llm=use_llm)
 
 
@@ -124,7 +130,10 @@ def merge(income: CanonicalStatement, balance: CanonicalStatement) -> CanonicalS
     """Combine income-statement and balance-sheet canonical lines into one
     statement. Income metadata wins; balance lines fill accounts income lacks."""
     merged = income.model_copy(deep=True)
+    added = 0
     for key, line in balance.lines.items():
         if key not in merged.lines:
             merged.lines[key] = line
+            added += 1
+    logger.info("Merged canonical statements: kept {} income line(s), added {} balance line(s)", len(income.lines), added)
     return merged

@@ -3,6 +3,7 @@ from collections import Counter
 from pathlib import Path
 
 import fitz
+from loguru import logger
 
 from .text import Page
 
@@ -37,11 +38,15 @@ def _matches(text: str, markers: list[str]) -> bool:
 
 
 def find_income_pages(pages: list[Page]) -> list[int]:
-    return [p.number for p in pages if _matches(p.text, INCOME_MARKERS)]
+    matches = [p.number for p in pages if _matches(p.text, INCOME_MARKERS)]
+    logger.debug("Income-page keyword hits: {}", matches)
+    return matches
 
 
 def find_notes_pages(pages: list[Page]) -> list[int]:
-    return [p.number for p in pages if _matches(p.text, NOTES_MARKERS)]
+    matches = [p.number for p in pages if _matches(p.text, NOTES_MARKERS)]
+    logger.debug("Notes-page keyword hits: {}", matches)
+    return matches
 
 
 def rank_income_pages(pages: list[Page]) -> list[int]:
@@ -56,7 +61,9 @@ def rank_income_pages(pages: list[Page]) -> list[int]:
         score = (1 if has_year else 0, num_count)
         scored.append((score, p.number))
     scored.sort(reverse=True)
-    return [num for _, num in scored]
+    ranked = [num for _, num in scored]
+    logger.debug("Ranked income pages: {}", ranked)
+    return ranked
 
 def rank_balance_sheet_pages(pages: list[Page]) -> list[int]:
     """Balance-sheet hits, best-first — same year+numeric-density tie-break as income."""
@@ -67,7 +74,9 @@ def rank_balance_sheet_pages(pages: list[Page]) -> list[int]:
         score = (1 if _YEAR.search(p.text) else 0, len(_NUMBER.findall(p.text)))
         scored.append((score, p.number))
     scored.sort(reverse=True)
-    return [num for _, num in scored]
+    ranked = [num for _, num in scored]
+    logger.debug("Ranked balance-sheet pages: {}", ranked)
+    return ranked
 
 # --- table-of-contents based routing ---------------------------------------
 
@@ -82,8 +91,10 @@ def income_page_from_outline(pdf: Path) -> int | None:
         toc = doc.get_toc()  # list of [level, title, page]; page is 1-based physical
     finally:
         doc.close()
+    logger.debug("Checking outline for income page in {}", pdf.name)
     for _level, title, page in toc:
         if page >= 1 and _matches(title, INCOME_MARKERS):
+            logger.info("Resolved income page {} from outline in {}", page, pdf.name)
             return page
     return None
 
@@ -141,15 +152,19 @@ def income_page_from_printed_toc(pages: list[Page]) -> int | None:
     number to a physical PDF page index. Returns 1-based physical page or None."""
     contents = _find_contents_page(pages)
     if contents is None:
+        logger.debug("No printed contents page found")
         return None
     printed_target = _printed_toc_entry_page(contents.text, INCOME_MARKERS)
     if printed_target is None:
+        logger.debug("Printed contents page did not list an income statement entry")
         return None
     offset = _page_offset(pages, contents)
     if offset is None:
+        logger.debug("Could not infer printed-page offset from contents page")
         return None
     physical = printed_target + offset
     if 1 <= physical <= len(pages):
+        logger.info("Resolved income page {} from printed TOC", physical)
         return physical
     return None
 
@@ -190,10 +205,12 @@ def note_pages_from_toc(pages: list[Page], numbers: list[int]) -> dict[int, int]
     are returned."""
     contents = _find_contents_page(pages)
     if contents is None:
+        logger.debug("No printed contents page found for note lookup")
         return {}
     listing = _toc_note_listing(contents.text)
     offset = _page_offset(pages, contents)
     if offset is None:
+        logger.debug("Could not infer printed-page offset for note lookup")
         return {}
     located: dict[int, int] = {}
     for n in numbers:
@@ -203,6 +220,7 @@ def note_pages_from_toc(pages: list[Page], numbers: list[int]) -> dict[int, int]
         physical = printed + offset
         if 1 <= physical <= len(pages):
             located[n] = physical
+    logger.info("Resolved note pages from TOC: {}", located)
     return located
 
 
@@ -210,6 +228,7 @@ def resolve_income_page(pdf: Path, pages: list[Page]) -> tuple[int | None, str |
     """Locate the income-statement page, best source first:
     embedded outline -> printed contents page -> keyword heuristic.
     Returns (1-based page, source) or (None, None)."""
+    logger.info("Resolving income page for {}", pdf.name)
     page = income_page_from_outline(pdf)
     if page is not None:
         return page, "outline"
@@ -218,7 +237,9 @@ def resolve_income_page(pdf: Path, pages: list[Page]) -> tuple[int | None, str |
         return page, "printed_toc"
     ranked = rank_income_pages(pages)
     if ranked:
+        logger.info("Resolved income page {} from heuristic for {}", ranked[0], pdf.name)
         return ranked[0], "heuristic"
+    logger.warning("Could not resolve an income page for {}", pdf.name)
     return None, None
 
 

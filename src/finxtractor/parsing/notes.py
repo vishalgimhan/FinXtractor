@@ -1,4 +1,7 @@
 import re
+
+from loguru import logger
+
 from ..schemas.note import NoteRef
 
 _FOOTNOTE_MARKERS = re.compile(r"[*†‡§¶#]")                 # strip; not note numbers
@@ -32,9 +35,12 @@ def parse_note_refs(raw: str | None) -> list[NoteRef]:
             if ref.key() not in seen:                      # dedupe by canonical key
                 seen.add(ref.key())
                 refs.append(ref)
+    logger.debug("Parsed {} note ref(s) from {!r}", len(refs), raw)
     return refs
 
 def resolve_line_item_notes(stmt) -> None:
     """Fill each line item's structured note_refs from its raw note string."""
+    logger.info("Resolving note refs for {} line item(s)", len(stmt.line_items))
     for item in stmt.line_items:
         item.note_refs = parse_note_refs(item.note_ref_raw)
+    logger.debug("Completed note ref resolution")

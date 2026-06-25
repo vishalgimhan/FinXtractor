@@ -12,6 +12,7 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8")
 
+from finxtractor.config import get_param
 from finxtractor.parsing.text import extract_pages
 from finxtractor.parsing.routing import resolve_income_page
 from finxtractor.parsing.vlm_fallback import extract_income_statement
@@ -45,8 +46,10 @@ def run(pdf: Path):
     """Load a PDF and print its page count (wiring check)."""
     if not pdf.exists():
         raise typer.BadParameter(f"No file at {pdf}")
+    logger.info("Opening {} for page-count check", pdf.name)
     doc = fitz.open(pdf)
     typer.echo(f"{pdf.name}: {doc.page_count} pages")
+    logger.debug("Page-count check complete for {}", pdf.name)
     doc.close()
 
 @app.command()
@@ -67,6 +70,7 @@ def extract(
     else:
         logger.info("Using explicit page {}", page)
     stmt = _build_statement(pdf, page)
+    logger.info("Built statement for {} page {} with {} line item(s)", pdf.name, page, len(stmt.line_items))
     logger.debug("Finished extract for {} with {} line item(s)", pdf.name, len(stmt.line_items))
     typer.echo(stmt.model_dump_json(indent=2))
 
@@ -74,8 +78,10 @@ def extract(
 def breakdown(pdf: Path, label: str, page: int = typer.Option(None, "--page")):
     """Show the full breakdown behind a line item (e.g. 'Revenue')."""
     page = page or _resolved_page(pdf)
+    logger.info("Running breakdown for {} label {!r} on page {}", pdf.name, label, page)
     stmt = _build_statement(pdf, page)
     G = build_graph(stmt, pdf)
+    logger.debug("Built breakdown graph for {} label {!r}", pdf.name, label)
     typer.echo(json.dumps(drill_down(G, label), indent=2, default=str))
 
 
@@ -83,8 +89,10 @@ def breakdown(pdf: Path, label: str, page: int = typer.Option(None, "--page")):
 def note_refs(pdf: Path, number: int, page: int = typer.Option(None, "--page")):
     """Show which line items reference a given note number."""
     page = page or _resolved_page(pdf)
+    logger.info("Running note-refs for {} note {} on page {}", pdf.name, number, page)
     stmt = _build_statement(pdf, page)
     G = build_graph(stmt, pdf)
+    logger.debug("Built note-reference graph for {} note {}", pdf.name, number)
     typer.echo(json.dumps(referencing_line_items(G, number), indent=2, default=str))
 
 @app.command()
@@ -95,8 +103,10 @@ def canonical(
 ):
     """Extract, map, and normalize one report's income statement to canonical form."""
     page = page or _resolved_page(pdf)
+    logger.info("Running canonical extract for {} on page {} (llm={})", pdf.name, page, use_llm)
     stmt = _build_statement(pdf, page)
     cs = normalize(stmt, use_llm=use_llm)
+    logger.info("Canonical statement built for {} with {} canonical line(s)", pdf.name, len(cs.lines))
     typer.echo(cs.model_dump_json(indent=2))
 
 @app.command("canonical-full")
@@ -108,9 +118,11 @@ def canonical_full(
 ):
     """Full canonical pull: income statement + targeted balance-sheet items."""
     ip = income_page or _resolved_page(pdf)
+    logger.info("Running canonical-full for {} (income_page={}, bs_page={}, llm={})", pdf.name, ip, bs_page, use_llm)
     income = normalize(_build_statement(pdf, ip), use_llm=use_llm)
     balance = pull_balance_sheet(pdf, bs_page, use_llm=use_llm)
     full = merge(income, balance)
+    logger.info("Merged canonical statements for {} into {} line(s)", pdf.name, len(full.lines))
     typer.echo(full.model_dump_json(indent=2))
 
 @app.command()
@@ -121,12 +133,14 @@ def validate(
 ):
     """Full pipeline: extract -> normalize -> cross-foot -> retry -> confidence -> HITL gate."""
     ip = income_page or _resolved_page(pdf)
+    logger.info("Running validate pipeline for {} (income_page={}, bs_page={})", pdf.name, ip, bs_page)
     income = normalize(_build_statement(pdf, ip))
     full = merge(income, pull_balance_sheet(pdf, bs_page))
 
     stmt, checks, retries = validate_with_retry(pdf, full, ip, bs_page)
     confidences = score_statement(stmt, checks)
     report = build_report(checks, confidences, retries)
+    logger.info("Validation finished for {} with {} check(s), {} retry(ies), {} flagged", pdf.name, len(checks), retries, report.flagged_count)
 
     typer.echo(report.model_dump_json(indent=2))
     if report.flagged_count:
@@ -138,10 +152,11 @@ def pipeline(
     pdf: Path,
     income_page: int = typer.Option(None, "--income-page"),
     bs_page: int = typer.Option(None, "--bs-page"),
-    max_retries: int = typer.Option(2, "--max-retries"),
+    max_retries: int = typer.Option(get_param("validation", "max_retries", default=2), "--max-retries"),
 ):
     """Run the full LangGraph pipeline for one report."""
     ip = income_page or _resolved_page(pdf)
+    logger.info("Running pipeline for {} (income_page={}, bs_page={}, max_retries={})", pdf.name, ip, bs_page, max_retries)
     graph = compiled_pipeline()
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
     initial = {"pdf": str(pdf), "income_page": ip, "bs_page": bs_page,
@@ -149,6 +164,7 @@ def pipeline(
 
     final = graph.invoke(initial, config)
 
+    logger.info("Pipeline finished for {} with route={}, retries={}, flagged={}", pdf.name, final.get('route'), final.get('retries', 0), final['report'].flagged_count)
     typer.echo(f"route taken : {final.get('route')}")
     typer.echo(f"retries     : {final.get('retries', 0)}")
     typer.echo(f"flagged     : {final['report'].flagged_count}")
@@ -165,6 +181,7 @@ def run_all(max_retries: int = typer.Option(2, "--max-retries")):
         DocSpec("data/reports/report3.pdf", income_page=__, bs_page=__),
         DocSpec("data/reports/report4.pdf", income_page=__, bs_page=__),
     ]
+    logger.info("Running batch pipeline for {} document(s) with max_retries={}", len(specs), max_retries)
     results = orchestrate(specs, max_retries)
     typer.echo(f"\n{'REPORT':30} {'ROUTE':10} {'RETRIES':8} {'FLAGGED':8}")
     for r in results:
