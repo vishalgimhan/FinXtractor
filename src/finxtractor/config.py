@@ -5,6 +5,7 @@
 - LLM provider selection via config/llm.yaml (`load_active_provider`)
 """
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -17,6 +18,7 @@ load_dotenv()   # populate the environment from a local .env
 _CONFIG_DIR = Path("config")
 _LLM_PATH = _CONFIG_DIR / "llm.yaml"
 _PARAM_PATH = _CONFIG_DIR / "param.yaml"
+_PATTERNS_PATH = _CONFIG_DIR / "patterns.yaml"
 
 
 # --- environment / secrets --------------------------------------------------
@@ -42,6 +44,56 @@ def get_param(*keys: str, default=None):
             return default
         node = node[k]
     return node
+
+
+# --- markers & regex patterns (config/patterns.yaml) ------------------------
+# Built-in defaults; config/patterns.yaml overrides any of these when present.
+_DEFAULT_MARKERS: dict[str, list[str]] = {
+    "income": [
+        "statement of profit or loss",
+        "statement of profit",
+        "statement of comprehensive income",
+        "statement of financial performance",
+        "income statement",
+    ],
+    "balance_sheet": [
+        "statement of financial position",
+        "balance sheet",
+        "consolidated statement of financial position",
+    ],
+    "notes": [
+        "notes to the financial statements",
+        "notes to and forming part of",
+    ],
+}
+
+_DEFAULT_REGEX: dict[str, str] = {
+    "year": r"\b(19|20)\d{2}\b",
+    "number": r"\$|\d[\d,]{2,}",
+    "standalone_int": r"^\s*(\d{1,3})\s*$",     # a printed page number, not a year
+}
+
+
+@lru_cache(maxsize=1)
+def load_patterns() -> dict:
+    """Load config/patterns.yaml once. Missing file -> {} so callers fall back to defaults."""
+    if _PATTERNS_PATH.exists():
+        return yaml.safe_load(_PATTERNS_PATH.read_text()) or {}
+    return {}
+
+
+def get_markers(name: str) -> list[str]:
+    """A named marker list from patterns.yaml (e.g. 'income'), or its built-in default."""
+    val = load_patterns().get("markers", {}).get(name)
+    return val if val is not None else _DEFAULT_MARKERS.get(name, [])
+
+
+def get_pattern(name: str) -> re.Pattern:
+    """A named regex from patterns.yaml (e.g. 'year'), compiled, or its built-in default."""
+    raw = load_patterns().get("regex", {}).get(name) or _DEFAULT_REGEX.get(name)
+    if raw is None:
+        raise KeyError(f"unknown regex pattern '{name}'")
+    return re.compile(raw)
 
 
 # --- LLM provider (config/llm.yaml) -----------------------------------------

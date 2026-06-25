@@ -1,0 +1,22 @@
+# Page-routing markers and regex patterns. Loaded via finxtractor.config.
+# (single-quoted regex scalars so backslashes are literal)
+
+markers:
+  income:
+    - "statement of profit or loss"
+    - "statement of profit"
+    - "statement of comprehensive income"
+    - "statement of financial performance"
+    - "income statement"
+  balance_sheet:
+    - "statement of financial position"
+    - "balance sheet"
+    - "consolidated statement of financial position"
+  notes:
+    - "notes to the financial statements"
+    - "notes to and forming part of"
+
+regex:
+  year: '\b(19|20)\d{2}\b'
+  number: '\$|\d[\d,]{2,}'
+  standalone_int: '^\s*(\d{1,3})\s*$'
