@@ -14,12 +14,11 @@ for _stream in (sys.stdout, sys.stderr):
 
 from finxtractor.config import get_param
 from finxtractor.parsing.text import extract_pages
-from finxtractor.parsing.routing import resolve_page, INCOME_MARKERS
-from finxtractor.parsing.vlm_fallback import extract_income_statement
-from finxtractor.parsing.notes import resolve_line_item_notes
+from finxtractor.parsing.routing import resolve_page, INCOME_MARKERS, BALANCE_SHEET_MARKERS
+from finxtractor.parsing.statements import extract_statement, extract_canonical
 from finxtractor.graph.builder import build_graph
 from finxtractor.graph.queries import drill_down, referencing_line_items
-from finxtractor.normalize.normalize import normalize, pull_balance_sheet, merge
+from finxtractor.normalize.normalize import merge
 from finxtractor.validate.retry import validate_with_retry
 from finxtractor.validate.checks import run_all_checks
 from finxtractor.validate.confidence import score_statement
@@ -29,17 +28,15 @@ from finxtractor.orchestration.orchestrator import orchestrate, DocSpec
 
 app = typer.Typer()
 
-def _resolved_page(pdf: Path) -> int:
-    page, _source = resolve_page(pdf, extract_pages(pdf), INCOME_MARKERS)
+def _resolved_page(pdf: Path, markers: list) -> int:
+    page, _source = resolve_page(pdf, extract_pages(pdf), markers)
     if page is None:
         raise typer.BadParameter("No income page found; pass --page")
     return page
 
 
 def _build_statement(pdf: Path, page: int):
-    stmt = extract_income_statement(pdf, page)
-    resolve_line_item_notes(stmt)
-    return stmt
+    return extract_statement(pdf, page)   # raw Statement (parse + VLM gate + notes)
 
 @app.command()
 def run(pdf: Path):
@@ -77,7 +74,7 @@ def extract(
 @app.command()
 def breakdown(pdf: Path, label: str, page: int = typer.Option(None, "--page")):
     """Show the full breakdown behind a line item (e.g. 'Revenue')."""
-    page = page or _resolved_page(pdf)
+    page = page or _resolved_page(pdf, INCOME_MARKERS)
     logger.info("Running breakdown for {} label {!r} on page {}", pdf.name, label, page)
     stmt = _build_statement(pdf, page)
     G = build_graph(stmt, pdf)
@@ -88,7 +85,7 @@ def breakdown(pdf: Path, label: str, page: int = typer.Option(None, "--page")):
 @app.command("note-refs")
 def note_refs(pdf: Path, number: int, page: int = typer.Option(None, "--page")):
     """Show which line items reference a given note number."""
-    page = page or _resolved_page(pdf)
+    page = page or _resolved_page(pdf, INCOME_MARKERS)
     logger.info("Running note-refs for {} note {} on page {}", pdf.name, number, page)
     stmt = _build_statement(pdf, page)
     G = build_graph(stmt, pdf)
@@ -102,10 +99,9 @@ def canonical(
     use_llm: bool = typer.Option(False, "--use-llm", help="Enable the LLM mapping tier for unmatched subtotal lines"),
 ):
     """Extract, map, and normalize one report's income statement to canonical form."""
-    page = page or _resolved_page(pdf)
+    page = page or _resolved_page(pdf, INCOME_MARKERS)
     logger.info("Running canonical extract for {} on page {} (llm={})", pdf.name, page, use_llm)
-    stmt = _build_statement(pdf, page)
-    cs = normalize(stmt, use_llm=use_llm)
+    cs = extract_canonical(pdf, page, use_llm=use_llm)
     logger.info("Canonical statement built for {} with {} canonical line(s)", pdf.name, len(cs.lines))
     typer.echo(cs.model_dump_json(indent=2))
 
@@ -117,10 +113,11 @@ def canonical_full(
     use_llm: bool = typer.Option(False, "--use-llm", help="Enable the LLM mapping tier for unmatched subtotal lines"),
 ):
     """Full canonical pull: income statement + targeted balance-sheet items."""
-    ip = income_page or _resolved_page(pdf)
-    logger.info("Running canonical-full for {} (income_page={}, bs_page={}, llm={})", pdf.name, ip, bs_page, use_llm)
-    income = normalize(_build_statement(pdf, ip), use_llm=use_llm)
-    balance = pull_balance_sheet(pdf, bs_page, use_llm=use_llm)
+    ip = income_page or _resolved_page(pdf, INCOME_MARKERS)
+    bsp = bs_page or _resolved_page(pdf, BALANCE_SHEET_MARKERS)
+    logger.info("Running canonical-full for {} (income_page={}, bs_page={}, llm={})", pdf.name, ip, bsp, use_llm)
+    income = extract_canonical(pdf, ip, use_llm=use_llm)
+    balance = extract_canonical(pdf, bsp, use_llm=use_llm)
     full = merge(income, balance)
     logger.info("Merged canonical statements for {} into {} line(s)", pdf.name, len(full.lines))
     typer.echo(full.model_dump_json(indent=2))
@@ -132,12 +129,13 @@ def validate(
     bs_page: int = typer.Option(None, "--bs-page"),
 ):
     """Full pipeline: extract -> normalize -> cross-foot -> retry -> confidence -> HITL gate."""
-    ip = income_page or _resolved_page(pdf)
-    logger.info("Running validate pipeline for {} (income_page={}, bs_page={})", pdf.name, ip, bs_page)
-    income = normalize(_build_statement(pdf, ip))
-    full = merge(income, pull_balance_sheet(pdf, bs_page))
+    ip = income_page or _resolved_page(pdf, INCOME_MARKERS)
+    bsp = bs_page or _resolved_page(pdf, BALANCE_SHEET_MARKERS)
+    logger.info("Running validate pipeline for {} (income_page={}, bs_page={})", pdf.name, ip, bsp)
+    income = extract_canonical(pdf, ip)
+    full = merge(income, extract_canonical(pdf, bsp))
 
-    stmt, checks, retries = validate_with_retry(pdf, full, ip, bs_page)
+    stmt, checks, retries = validate_with_retry(pdf, full, ip, bsp)
     confidences = score_statement(stmt, checks)
     report = build_report(checks, confidences, retries)
     logger.info("Validation finished for {} with {} check(s), {} retry(ies), {} flagged", pdf.name, len(checks), retries, report.flagged_count)
@@ -155,11 +153,12 @@ def pipeline(
     max_retries: int = typer.Option(get_param("validation", "max_retries", default=2), "--max-retries"),
 ):
     """Run the full LangGraph pipeline for one report."""
-    ip = income_page or _resolved_page(pdf)
-    logger.info("Running pipeline for {} (income_page={}, bs_page={}, max_retries={})", pdf.name, ip, bs_page, max_retries)
+    ip = income_page or _resolved_page(pdf, INCOME_MARKERS)
+    bsp = bs_page or _resolved_page(pdf, BALANCE_SHEET_MARKERS)
+    logger.info("Running pipeline for {} (income_page={}, bs_page={}, max_retries={})", pdf.name, ip, bsp, max_retries)
     graph = compiled_pipeline()
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
-    initial = {"pdf": str(pdf), "income_page": ip, "bs_page": bs_page,
+    initial = {"pdf": str(pdf), "income_page": ip, "bs_page": bsp,
                "retries": 0, "max_retries": max_retries}
 
     final = graph.invoke(initial, config)

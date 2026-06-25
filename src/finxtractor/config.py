@@ -16,9 +16,9 @@ from pydantic import BaseModel
 load_dotenv()   # populate the environment from a local .env
 
 _CONFIG_DIR = Path("config")
-_LLM_PATH = _CONFIG_DIR / "llm.yaml"
 _PARAM_PATH = _CONFIG_DIR / "param.yaml"
 _PATTERNS_PATH = _CONFIG_DIR / "patterns.yaml"
+_MODELS_PATH = _CONFIG_DIR / "models.yaml"   # chat LLM provider + model names
 
 
 # --- environment / secrets --------------------------------------------------
@@ -44,6 +44,20 @@ def get_param(*keys: str, default=None):
             return default
         node = node[k]
     return node
+
+
+# --- models (config/models.yaml: chat LLM provider + model names) -----------
+@lru_cache(maxsize=1)
+def load_models() -> dict:
+    """Load config/models.yaml once. Missing file -> {} so callers fall back to defaults."""
+    if _MODELS_PATH.exists():
+        return yaml.safe_load(_MODELS_PATH.read_text()) or {}
+    return {}
+
+
+def get_model(name: str, default: str | None = None) -> str | None:
+    """A named model from models.yaml (e.g. 'vlm'), or the default."""
+    return load_models().get(name, default)
 
 
 # --- markers & regex patterns (config/patterns.yaml) ------------------------
@@ -96,7 +110,7 @@ def get_pattern(name: str) -> re.Pattern:
     return re.compile(raw)
 
 
-# --- LLM provider (config/llm.yaml) -----------------------------------------
+# --- LLM provider (config/models.yaml -> `llm` section) ---------------------
 class ProviderConfig(BaseModel):
     model: str
     base_url: str
@@ -104,6 +118,6 @@ class ProviderConfig(BaseModel):
 
 
 def load_active_provider() -> tuple[str, ProviderConfig]:
-    raw = yaml.safe_load(_LLM_PATH.read_text())
-    active = get_env("FINX_LLM_PROVIDER", raw["active"])   # .env overrides file
-    return active, ProviderConfig(**raw["providers"][active])
+    llm = load_models().get("llm", {})
+    active = get_env("FINX_LLM_PROVIDER", llm["active"])   # .env overrides file
+    return active, ProviderConfig(**llm["providers"][active])

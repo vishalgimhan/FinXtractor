@@ -1,7 +1,6 @@
 from .state import PipelineState
-from ..parsing.vlm_fallback import extract_income_statement
-from ..parsing.notes import resolve_line_item_notes
-from ..normalize.normalize import normalize, pull_balance_sheet, merge
+from ..parsing.statements import extract_canonical
+from ..normalize.normalize import merge
 from ..validate.checks import run_all_checks
 from ..validate.confidence import score_statement
 from ..validate.hitl import build_report
@@ -9,12 +8,11 @@ from ..validate.results import CheckStatus
 
 
 def extractor_node(state: PipelineState) -> dict:
-    """Extract income + balance sheet, normalize to canonical. (Extractor + Normalizer.)"""
+    """Extract income + balance sheet to canonical and merge. (Extractor + Normalizer.)"""
     pdf, ip, bsp = state["pdf"], state["income_page"], state.get("bs_page")
-    raw = extract_income_statement(pdf, ip)
-    resolve_line_item_notes(raw)
-    income = normalize(raw)
-    full = merge(income, pull_balance_sheet(pdf, bsp))
+    income = extract_canonical(pdf, ip)
+    balance_sheet = extract_canonical(pdf, bsp)
+    full = merge(income, balance_sheet)
     return {"statement": full}
 
 def validator_node(state: PipelineState) -> dict:

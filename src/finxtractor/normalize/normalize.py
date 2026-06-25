@@ -1,14 +1,9 @@
 from decimal import Decimal
-from pathlib import Path
 
 from loguru import logger
 
 from ..schemas import Statement, Units
 from ..schemas.canonical import CanonicalAccount, CanonicalLine, CanonicalStatement
-from ..parsing.docling_parser import parse_statement
-from ..parsing.routing import resolve_page, BALANCE_SHEET_MARKERS
-from ..parsing.text import extract_pages
-from ..parsing.notes import resolve_line_item_notes
 from .mapper import map_label
 from .llm_mapper import map_label_llm
 
@@ -80,9 +75,12 @@ def normalize(stmt: Statement, use_llm: bool = False) -> CanonicalStatement:
     logger.info("Normalizing {} line item(s) from {} (llm={})", len(stmt.line_items), stmt.source_pdf, use_llm)
     cs = CanonicalStatement(
         source_pdf=stmt.source_pdf,
+        statement_pages=stmt.statement_pages,
         year_current=stmt.year_current,
         year_prior=stmt.year_prior,
         currency=stmt.currency,
+        units=stmt.units,
+        sign_convention=stmt.sign_convention,
     )
     from_subtotal: dict[str, bool] = {}   # whether the stored value came from a subtotal row
     for item in stmt.line_items:
@@ -112,36 +110,11 @@ def normalize(stmt: Statement, use_llm: bool = False) -> CanonicalStatement:
     return cs
 
 
-# --- targeted balance-sheet pull (Phase 4 scope extension) ------------------
-
-def _bs_page(pdf: Path | str, override: int | None) -> int:
-    if override:
-        logger.info("Using explicit balance-sheet page {}", override)
-        return override
-    pdf = Path(pdf)
-    page, _src = resolve_page(pdf, extract_pages(pdf), BALANCE_SHEET_MARKERS)
-    if page is None:
-        raise ValueError("No balance-sheet page found; pass an explicit page")
-    return page
-
-
-def pull_balance_sheet(
-    pdf: Path | str, page: int | None = None, use_llm: bool = False
-) -> CanonicalStatement:
-    """Targeted balance-sheet pull: parse ALL tables on the BS page and normalize,
-    picking up current/total assets, liabilities, equity, retained earnings even
-    when the totals sit in a different table than the densest one."""
-    bs_page = _bs_page(pdf, page)
-    logger.info("Pulling balance sheet from {} page {} (llm={})", pdf, bs_page, use_llm)
-    stmt = parse_statement(pdf, bs_page)
-    resolve_line_item_notes(stmt)        # parse note_ref_raw -> note_refs
-    return normalize(stmt, use_llm=use_llm)
-
-
 def merge(income: CanonicalStatement, balance: CanonicalStatement) -> CanonicalStatement:
     """Combine income-statement and balance-sheet canonical lines into one
     statement. Income metadata wins; balance lines fill accounts income lacks."""
     merged = income.model_copy(deep=True)
+    merged.statement_pages = sorted(set(income.statement_pages) | set(balance.statement_pages))
     added = 0
     for key, line in balance.lines.items():
         if key not in merged.lines:

@@ -5,6 +5,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from .note import NoteRef
+from .statement import Units
 
 
 class CanonicalAccount(str, Enum):
@@ -37,9 +38,12 @@ class CanonicalLine(BaseModel):
 
 class CanonicalStatement(BaseModel):
     source_pdf: str
+    statement_pages: list[int] = Field(default_factory=list)
     year_current: Optional[int] = None
     year_prior: Optional[int] = None
     currency: str = "AUD"
+    units: Units = Units.ACTUAL              # source rounding unit; canonical values are absolute
+    sign_convention: str = "parentheses_negative"
     lines: dict[str, CanonicalLine] = Field(default_factory=dict)  # keyed by account value
 
     def get(self, account: CanonicalAccount) -> Optional[CanonicalLine]:

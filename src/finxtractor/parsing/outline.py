@@ -13,8 +13,7 @@ from loguru import logger
 from ..config import get_markers, get_pattern
 from .text import Page
 
-# What an income-statement title looks like (in an outline entry or TOC line).
-INCOME_MARKERS = get_markers("income")
+
 
 # A line that is nothing but a small integer (a printed page number, not a year).
 _STANDALONE_INT = get_pattern("standalone_int")

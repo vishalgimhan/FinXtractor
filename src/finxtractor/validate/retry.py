@@ -8,8 +8,8 @@ from .checks import run_all_checks
 from .results import CheckResult, CheckStatus
 
 from ..config import get_param
-from ..parsing.docling_parser import parse_statement
-from ..normalize.normalize import normalize, pull_balance_sheet, merge
+from ..parsing.statements import extract_canonical
+from ..normalize.normalize import merge
 
 # Which accounts live on which statement — tells us which page to re-extract.
 _INCOME_ACCOUNTS = {"revenue", "cost_of_sales", "gross_profit", "operating_expenses",
@@ -33,9 +33,9 @@ def _reextract(pdf: Path | str, region: str, income_page: int,
     e.g. ACCURATE TableFormer mode, or the VLM fork once armed — not just repeat."""
     if region == "balance":
         logger.info("Retrying balance-sheet extraction for {}", pdf)
-        return pull_balance_sheet(pdf, bs_page)
+        return extract_canonical(pdf, bs_page)
     logger.info("Retrying income-statement extraction for {} page {}", pdf, income_page)
-    return normalize(parse_statement(pdf, income_page))
+    return extract_canonical(pdf, income_page)
 
 def validate_with_retry(pdf: Path | str, stmt: CanonicalStatement,
                         income_page: int, bs_page: int | None = None,

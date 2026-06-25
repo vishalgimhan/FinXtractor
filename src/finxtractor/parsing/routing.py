@@ -6,7 +6,6 @@ from ..config import get_markers, get_pattern
 from .text import Page
 # TOC/outline logic lives in outline.py; re-exported here for back-compat.
 from .outline import (
-    INCOME_MARKERS,
     _matches,
     find_from_toc,
     page_from_outline,
@@ -15,23 +14,13 @@ from .outline import (
     _find_contents_page,
 )
 
+# What an income-statement title looks like (in an outline entry or TOC line).
+INCOME_MARKERS = get_markers("income")
 BALANCE_SHEET_MARKERS = get_markers("balance_sheet")
 NOTES_MARKERS = get_markers("notes")
 
 _YEAR = get_pattern("year")
 _NUMBER = get_pattern("number")
-
-
-def find_income_pages(pages: list[Page]) -> list[int]:
-    matches = [p.number for p in pages if _matches(p.text, INCOME_MARKERS)]
-    logger.debug("Income-page keyword hits: {}", matches)
-    return matches
-
-
-def find_notes_pages(pages: list[Page]) -> list[int]:
-    matches = [p.number for p in pages if _matches(p.text, NOTES_MARKERS)]
-    logger.debug("Notes-page keyword hits: {}", matches)
-    return matches
 
 
 def rank_pages(pages: list[Page], markers: list[str]) -> list[int]:
