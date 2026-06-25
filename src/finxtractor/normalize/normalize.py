@@ -6,7 +6,7 @@ from loguru import logger
 from ..schemas import Statement, Units
 from ..schemas.canonical import CanonicalAccount, CanonicalLine, CanonicalStatement
 from ..parsing.docling_parser import parse_all_tables   # all tables on a page -> Statement
-from ..parsing.routing import rank_balance_sheet_pages
+from ..parsing.routing import resolve_page, BALANCE_SHEET_MARKERS
 from ..parsing.text import extract_pages
 from .mapper import map_label
 from .llm_mapper import map_label_llm
@@ -107,11 +107,11 @@ def _bs_page(pdf: Path | str, override: int | None) -> int:
     if override:
         logger.info("Using explicit balance-sheet page {}", override)
         return override
-    ranked = rank_balance_sheet_pages(extract_pages(pdf))
-    if not ranked:
+    pdf = Path(pdf)
+    page, _src = resolve_page(pdf, extract_pages(pdf), BALANCE_SHEET_MARKERS)
+    if page is None:
         raise ValueError("No balance-sheet page found; pass an explicit page")
-    logger.info("Resolved balance-sheet page {}", ranked[0])
-    return ranked[0]
+    return page
 
 
 def pull_balance_sheet(

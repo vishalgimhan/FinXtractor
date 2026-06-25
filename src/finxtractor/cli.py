@@ -14,7 +14,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 from finxtractor.config import get_param
 from finxtractor.parsing.text import extract_pages
-from finxtractor.parsing.routing import resolve_income_page
+from finxtractor.parsing.routing import resolve_page, INCOME_MARKERS
 from finxtractor.parsing.vlm_fallback import extract_income_statement
 from finxtractor.parsing.notes import resolve_line_item_notes
 from finxtractor.graph.builder import build_graph
@@ -30,7 +30,7 @@ from finxtractor.orchestration.orchestrator import orchestrate, DocSpec
 app = typer.Typer()
 
 def _resolved_page(pdf: Path) -> int:
-    page, _source = resolve_income_page(pdf, extract_pages(pdf))
+    page, _source = resolve_page(pdf, extract_pages(pdf), INCOME_MARKERS)
     if page is None:
         raise typer.BadParameter("No income page found; pass --page")
     return page
@@ -62,7 +62,7 @@ def extract(
         raise typer.BadParameter(f"No file at {pdf}")
     logger.info("Starting extract for {}", pdf.name)
     if page is None:
-        page, source = resolve_income_page(pdf, extract_pages(pdf))
+        page, source = resolve_page(pdf, extract_pages(pdf), INCOME_MARKERS)
         if page is None:
             raise typer.BadParameter("No income-statement page found; try --page")
         typer.echo(f"Auto-selected page {page} (via {source}) as income-statement page", err=True)

@@ -27,21 +27,21 @@ def _matches(text: str, markers: list[str]) -> bool:
 
 # --- embedded outline -------------------------------------------------------
 
-def income_page_from_outline(pdf: Path) -> int | None:
+def page_from_outline(pdf: Path, markers: list[str]) -> int | None:
     """Use the PDF's embedded outline/bookmarks (most reliable when present).
 
-    Returns the 1-based physical page of the income statement, or None if the
-    PDF has no outline or no matching entry.
+    Returns the 1-based physical page of the first entry whose title matches
+    `markers`, or None if the PDF has no outline or no matching entry.
     """
     doc = fitz.open(pdf)
     try:
         toc = doc.get_toc()  # list of [level, title, page]; page is 1-based physical
     finally:
         doc.close()
-    logger.debug("Checking outline for income page in {}", pdf.name)
+    logger.debug("Checking outline for a matching page in {}", pdf.name)
     for _level, title, page in toc:
-        if page >= 1 and _matches(title, INCOME_MARKERS):
-            logger.info("Resolved income page {} from outline in {}", page, pdf.name)
+        if page >= 1 and _matches(title, markers):
+            logger.info("Resolved page {} from outline in {}", page, pdf.name)
             return page
     return None
 
@@ -96,16 +96,17 @@ def _page_offset(pages: list[Page], contents: Page | None) -> int | None:
     return offsets.most_common(1)[0][0]
 
 
-def income_page_from_printed_toc(pages: list[Page]) -> int | None:
-    """Parse a printed 'Contents' page, then map the listed (printed) page
-    number to a physical PDF page index. Returns 1-based physical page or None."""
+def page_from_printed_toc(pages: list[Page], markers: list[str]) -> int | None:
+    """Parse a printed 'Contents' page, find the entry matching `markers`, then
+    map its listed (printed) page number to a physical PDF page index.
+    Returns 1-based physical page or None."""
     contents = _find_contents_page(pages)
     if contents is None:
         logger.debug("No printed contents page found")
         return None
-    printed_target = _printed_toc_entry_page(contents.text, INCOME_MARKERS)
+    printed_target = _printed_toc_entry_page(contents.text, markers)
     if printed_target is None:
-        logger.debug("Printed contents page did not list an income statement entry")
+        logger.debug("Printed contents page did not list a matching entry")
         return None
     offset = _page_offset(pages, contents)
     if offset is None:
@@ -113,7 +114,7 @@ def income_page_from_printed_toc(pages: list[Page]) -> int | None:
         return None
     physical = printed_target + offset
     if 1 <= physical <= len(pages):
-        logger.info("Resolved income page {} from printed TOC", physical)
+        logger.info("Resolved page {} from printed TOC", physical)
         return physical
     return None
 
@@ -175,13 +176,13 @@ def note_pages_from_toc(pages: list[Page], numbers: list[int]) -> dict[int, int]
 
 # --- unified entry point ----------------------------------------------------
 
-def income_page_from_toc(pdf: Path, pages: list[Page]) -> tuple[int | None, str | None]:
-    """Locate the income statement via TOC, best source first:
+def find_from_toc(pdf: Path, pages: list[Page], markers: list[str]) -> tuple[int | None, str | None]:
+    """Locate a statement page via TOC for the given `markers`, best source first:
     embedded outline -> printed contents page. Returns (page, source) or (None, None)."""
-    page = income_page_from_outline(pdf)
+    page = page_from_outline(pdf, markers)
     if page is not None:
         return page, "outline"
-    page = income_page_from_printed_toc(pages)
+    page = page_from_printed_toc(pages, markers)
     if page is not None:
         return page, "printed_toc"
     return None, None
