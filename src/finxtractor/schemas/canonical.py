@@ -4,6 +4,8 @@ from enum import Enum
 from typing import Optional
 from pydantic import BaseModel, Field
 
+from .note import NoteRef
+
 
 class CanonicalAccount(str, Enum):
     # --- Income statement ---
@@ -29,6 +31,7 @@ class CanonicalLine(BaseModel):
     value_current: Optional[Decimal] = None       # normalized, absolute units
     value_prior: Optional[Decimal] = None
     source_labels: list[str] = Field(default_factory=list)  # raw labels that mapped here
+    note_refs: list[NoteRef] = Field(default_factory=list)  # notes cited by the source row(s)
     mapped_by: str = "alias"                       # "alias" | "fuzzy" | "llm"
 
 

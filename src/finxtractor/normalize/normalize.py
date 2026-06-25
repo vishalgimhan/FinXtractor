@@ -5,9 +5,10 @@ from loguru import logger
 
 from ..schemas import Statement, Units
 from ..schemas.canonical import CanonicalAccount, CanonicalLine, CanonicalStatement
-from ..parsing.docling_parser import parse_all_tables   # all tables on a page -> Statement
+from ..parsing.docling_parser import parse_statement
 from ..parsing.routing import resolve_page, BALANCE_SHEET_MARKERS
 from ..parsing.text import extract_pages
+from ..parsing.notes import resolve_line_item_notes
 from .mapper import map_label
 from .llm_mapper import map_label_llm
 
@@ -66,6 +67,15 @@ def _resolve_account(
     return account, ("llm" if account else "unmapped")
 
 
+def _merge_note_refs(dst: list, src: list) -> None:
+    """Append src note refs to dst, deduped by canonical key."""
+    seen = {r.key() for r in dst}
+    for r in src:
+        if r.key() not in seen:
+            dst.append(r)
+            seen.add(r.key())
+
+
 def normalize(stmt: Statement, use_llm: bool = False) -> CanonicalStatement:
     logger.info("Normalizing {} line item(s) from {} (llm={})", len(stmt.line_items), stmt.source_pdf, use_llm)
     cs = CanonicalStatement(
@@ -86,6 +96,7 @@ def normalize(stmt: Statement, use_llm: bool = False) -> CanonicalStatement:
         if key in cs.lines:                         # account already seen
             existing = cs.lines[key]
             existing.source_labels.append(item.label_raw)
+            _merge_note_refs(existing.note_refs, item.note_refs)
             # A subtotal (the real total line) wins over a detail component.
             if item.is_subtotal and not from_subtotal.get(key, False):
                 existing.value_current, existing.value_prior = cur, pri
@@ -94,7 +105,7 @@ def normalize(stmt: Statement, use_llm: bool = False) -> CanonicalStatement:
             continue
         cs.lines[key] = CanonicalLine(
             account=account, value_current=cur, value_prior=pri,
-            source_labels=[item.label_raw], mapped_by=method,
+            source_labels=[item.label_raw], note_refs=list(item.note_refs), mapped_by=method,
         )
         from_subtotal[key] = item.is_subtotal
     logger.info("Normalization produced {} canonical line(s) for {}", len(cs.lines), stmt.source_pdf)
@@ -122,7 +133,8 @@ def pull_balance_sheet(
     when the totals sit in a different table than the densest one."""
     bs_page = _bs_page(pdf, page)
     logger.info("Pulling balance sheet from {} page {} (llm={})", pdf, bs_page, use_llm)
-    stmt = parse_all_tables(pdf, bs_page)
+    stmt = parse_statement(pdf, bs_page)
+    resolve_line_item_notes(stmt)        # parse note_ref_raw -> note_refs
     return normalize(stmt, use_llm=use_llm)
 
 

@@ -80,13 +80,16 @@ def _to_float(token: str) -> float:
     return -float(digits) if neg else float(digits)
 
 # to identify page with right table (dense -> more likely)
-def _numeric_density(table) -> int:
-    try:
-        df = table.export_to_dataframe()
-    except Exception:
-        return 0
+def _money_cells(df) -> int:
     flat = df.astype(str).to_numpy().ravel()
     return sum(1 for c in flat if _MONEY.match(str(c).strip()))
+
+
+def _numeric_density(table) -> int:
+    try:
+        return _money_cells(table.export_to_dataframe())
+    except Exception:
+        return 0
 
 # detect years
 def _detect_years(df) -> tuple[int | None, int | None]:
@@ -188,10 +191,9 @@ def _row_to_item_positional(cells: list[str]) -> LineItem | None:
         return None
     return _make_item(label, vals, note_raw)
 
-def _table_to_items(table, page_number: int) -> list[LineItem]:
-    """Parse one Docling table's rows into LineItems with provenance."""
-    df = table.export_to_dataframe()
-    roles = _column_roles(df)
+def _table_to_items(table, page_number: int, df, roles: ColumnRoles) -> list[LineItem]:
+    """Parse one Docling table's rows into LineItems with provenance.
+    `df` and `roles` are precomputed by the caller to avoid re-exporting."""
     prov_bbox = None
     if table.prov:
         b = table.prov[0].bbox
@@ -224,43 +226,36 @@ def _apply_context(stmt: Statement, pdf_path: Path, page_number: int, df) -> Non
     )
 
 
-def parse_all_tables(pdf: Path | str, page_number: int) -> Statement:
-    """Aggregate rows from EVERY table on the page (not just the densest). Used
-    for the balance sheet, where the totals can live in a different table than
-    the densest one."""
+def _has_year_columns(roles: ColumnRoles) -> bool:
+    """A statement table: its header carries at least one year-bearing column."""
+    value_cols, _note, _label = roles
+    return bool(value_cols)
+
+
+def parse_statement(pdf: Path | str, page_number: int) -> Statement:
+    """Parse a page into a Statement, aggregating every table whose header carries
+    a year column (so multi-table statements are captured without ingesting
+    unrelated tables). Falls back to the densest table when no table has a year
+    header (positional parsing). Context comes from the densest selected table."""
     pdf_path = Path(pdf)
-    logger.info("Parsing all tables from {} page {}", pdf_path.name, page_number)
+    logger.info("Parsing {} page {}", pdf_path.name, page_number)
     result = _build_converter().convert(str(pdf), page_range=(page_number, page_number))
     doc = result.document
-    stmt = Statement(source_pdf=pdf_path.name, statement_pages=[page_number])
-    if not doc.tables:
-        logger.warning("No tables found on page {}; returning empty statement", page_number)
-        return stmt
-    densest = max(doc.tables, key=_numeric_density)
-    _apply_context(stmt, pdf_path, page_number, densest.export_to_dataframe())
-    for table in doc.tables:
-        stmt.line_items.extend(_table_to_items(table, page_number))
-    logger.info("Parsed {} line item(s) from {} table(s) on page {}",
-                len(stmt.line_items), len(doc.tables), page_number)
-    return stmt
-
-
-def parse_income_statement(pdf: Path | str, page_number: int) -> Statement:
-    pdf_path = Path(pdf)
-    logger.info("Parsing income statement from {} page {}", pdf_path.name, page_number)
-    result = _build_converter().convert(str(pdf), page_range=(page_number, page_number))
-    doc = result.document
-
     stmt = Statement(source_pdf=pdf_path.name, statement_pages=[page_number])
     if not doc.tables:
         logger.warning("No tables found on page {}; returning empty statement", page_number)
         return stmt  # no table => VLM-fallback territory
 
-    table = max(doc.tables, key=_numeric_density)    # densest table on the page
-    logger.debug("Selected densest table from {} candidate(s)", len(doc.tables))
-    _apply_context(stmt, pdf_path, page_number, table.export_to_dataframe())
-    stmt.line_items.extend(_table_to_items(table, page_number))
-    logger.info("Parsed {} line item(s) from {} page {}",
-                len(stmt.line_items), pdf_path.name, page_number)
+    # Export each table once; carry (table, df, roles) through.
+    parsed = [(t, df := t.export_to_dataframe(), _column_roles(df)) for t in doc.tables]
+    selected = [pr for pr in parsed if _has_year_columns(pr[2])]
+    if not selected:                                  # no year headers -> densest, positional
+        selected = [max(parsed, key=lambda pr: _money_cells(pr[1]))]
+    densest = max(selected, key=lambda pr: _money_cells(pr[1]))
+    _apply_context(stmt, pdf_path, page_number, densest[1])
+    for table, df, roles in selected:
+        stmt.line_items.extend(_table_to_items(table, page_number, df, roles))
+    logger.info("Parsed {} line item(s) from {}/{} table(s) on page {}",
+                len(stmt.line_items), len(selected), len(doc.tables), page_number)
     return stmt
 
