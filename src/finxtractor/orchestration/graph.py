@@ -2,14 +2,14 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import InMemorySaver
 
 from .state import PipelineState
-from .nodes import resolver_node, extractor_node, validator_node, retry_node, hitl_node, scoring_node
+from .nodes import resolver_agent, extractor_node, validator_node, retry_node, hitl_node, scoring_node
 from .router import route_after_resolver, route_after_validation
 
 
 def build_pipeline() -> StateGraph:
     g = StateGraph(PipelineState)
 
-    g.add_node("resolver", resolver_node)
+    g.add_node("resolver", resolver_agent)
     g.add_node("extractor", extractor_node)
     g.add_node("validator", validator_node)
     g.add_node("retry", retry_node)

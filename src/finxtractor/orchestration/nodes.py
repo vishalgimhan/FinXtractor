@@ -1,13 +1,5 @@
-from pathlib import Path
-
-from loguru import logger
-
 from .state import PipelineState
-from ..parsing.routing import resolve_page, INCOME_MARKERS, BALANCE_SHEET_MARKERS
-from ..parsing.text import extract_pages, assess_text_layer
-from ..services.pdf_reader import get_pdf_reader
-from ..agents.toc import build_page_index
-from ..agents.page_locator import locate_scanned
+from ..agents.resolver import resolve
 from ..parsing.statements import extract_canonical
 from ..normalize.normalize import merge
 from ..validate.checks import run_all_checks
@@ -20,60 +12,13 @@ from ..scoring.composite import compute_composite
 from ..scoring.risk import compute_risk
 from ..scoring.schemas import CreditReport
 
-def resolver_node(state: PipelineState) -> dict:
-    """Locate the statement pages. Precedence per page: explicit override ->
-    unified page index (agentic TOC + embedded outline) -> deterministic
-    printed-TOC/heuristic. The page index is built once and carried in state
-    for reuse. (Resolver.)"""
-    pdf = Path(state["pdf"])
-    pages = extract_pages(pdf)                 # one text read
-    embedded_outline = get_pdf_reader().outline(pdf)  # one bookmark read, reused below
-    layer = assess_text_layer(pages)
-    # Unify the two title->page sources (agentic TOC + outline) into one index.
-    # On a scan there's no contents text, so it naturally holds outline entries only.
-    index = build_page_index(pdf, pages, outline=embedded_outline)
-    logger.info("Triage for {}: text_layer={}", pdf.name, layer)
-
-    def locate(override, markers):
-        """override -> unified page index -> deterministic (text only). None if all miss."""
-        if override is not None:
-            return override, "override"
-        p, source = index.resolve(markers)
-        if p is not None and 1 <= p <= len(pages):
-            return p, source
-        if layer != "none":               # printed-TOC + heuristic are pointless on a scan
-            return resolve_page(pdf, pages, markers, outline=embedded_outline)
-        return None, None
-
-    ip, ip_source = locate(state.get("income_page"), INCOME_MARKERS)
-    bsp, bsp_source = locate(state.get("bs_page"), BALANCE_SHEET_MARKERS)
-
-    # Escalate to the scan locator (OCR pages -> rank; VLM-classify the rest) when
-    # text tiers couldn't find income, or the PDF is scanned.
-    missing = {}
-    if ip is None:
-        missing["income"] = INCOME_MARKERS
-    if bsp is None:
-        missing["balance"] = BALANCE_SHEET_MARKERS
-    if missing and (layer == "none" or ip is None):
-        scanned = locate_scanned(pdf, len(pages), missing, text_layer=layer)
-        if "income" in scanned:
-            ip, ip_source = scanned["income"]
-        if "balance" in scanned:
-            bsp, bsp_source = scanned["balance"]
-
-    if ip is None:
-        # Graceful: no crash. Route to HITL with a clear, inspectable reason.
-        msg = f"Could not locate an income-statement page in {pdf.name} (text_layer={layer})"
-        logger.warning(msg)
-        return {"income_page": None, "text_layer": layer, "page_index": index,
-                "resolution_error": msg, "route": "unresolved"}
-
-    logger.info("Resolved pages for {}: income={} ({}), balance={} ({})",
-                pdf.name, ip, ip_source, bsp, bsp_source)
-    return {"income_page": ip, "bs_page": bsp,
-            "income_page_source": ip_source, "bs_page_source": bsp_source,
-            "text_layer": layer, "page_index": index, "route": "resolved"}
+def resolver_agent(state: PipelineState) -> dict:
+    """Locate the statement pages via the resolver agent — an LLM that drives the
+    location tiers (extract -> triage -> index -> printed-TOC/heuristic -> OCR/VLM
+    scan) through tools and decides when to stop. Falls back to the deterministic
+    cascade if the LLM tier is down. The page index is built once and carried in
+    state for reuse. (Resolver.)"""
+    return resolve(state["pdf"], state.get("income_page"), state.get("bs_page"))
 
 def extractor_node(state: PipelineState) -> dict:
     """Extract income (+ balance sheet, if located) to canonical and merge.

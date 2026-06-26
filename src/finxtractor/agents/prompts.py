@@ -61,6 +61,51 @@ def toc_extraction_prompt(toc_text: str) -> str:
     )
 
 
+def resolver_system_prompt() -> str:
+    """System prompt for the page-resolver agent: an LLM that drives the
+    statement-page-location tiers via tools and decides when to stop."""
+    return (
+        "You locate the financial-statement pages in a PDF annual report: the "
+        "INCOME statement (statement of profit or loss) and the BALANCE sheet "
+        "(statement of financial position). You work through TOOLS — you never "
+        "read the page text yourself; each tool returns a compact result.\n\n"
+        "Recommended workflow (escalate only as needed, cheapest tier first):\n"
+        "1. extract_pages_tool — always first; loads the pages.\n"
+        "2. assess_text_layer_tool — classify the PDF ('ok'/'sparse'/'none').\n"
+        "3. build_page_index_tool, then lookup_page_index for each kind — the "
+        "unified agentic-TOC + outline index, the most reliable source.\n"
+        "4. For any kind still missing on a TEXT pdf (text_layer != 'none'): "
+        "lookup_printed_toc_and_heuristic.\n"
+        "5. For any kind still missing, or whenever text_layer == 'none' "
+        "(scanned): scan_pdf — this is expensive (OCR + VLM), so use it last.\n\n"
+        "Rules:\n"
+        "- Stop as soon as both kinds are found, or every applicable tier has "
+        "missed. Do not call a tool twice for the same kind once it is found.\n"
+        "- On a scanned PDF (text_layer == 'none') the printed-TOC/heuristic "
+        "tier is useless — skip it and go straight to scan_pdf.\n"
+        "- The income statement is the priority; the balance sheet may be "
+        "absent. Never invent a page number — only report pages a tool returned.\n"
+        "- When done, return the structured result: the located page and the "
+        "source tier for each kind, or null if it could not be located."
+    )
+
+
+def resolver_user_prompt(pdf_name: str, income_override: int | None,
+                         bs_override: int | None) -> str:
+    """Per-run request for the page-resolver agent."""
+    lines = [
+        f"Locate the income statement and balance sheet pages in '{pdf_name}'.",
+    ]
+    if income_override is not None:
+        lines.append(f"The income statement page is already known: {income_override}. "
+                     "Use it as-is (source 'override'); do not search for it.")
+    if bs_override is not None:
+        lines.append(f"The balance sheet page is already known: {bs_override}. "
+                     "Use it as-is (source 'override'); do not search for it.")
+    lines.append("Begin with extract_pages_tool.")
+    return "\n".join(lines)
+
+
 def page_classification_prompt(kinds: list[str]) -> str:
     """Prompt for the VLM page classifier: which statement (if any) a page image is."""
     return (
