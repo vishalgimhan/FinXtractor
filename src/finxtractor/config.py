@@ -15,7 +15,8 @@ from pydantic import BaseModel
 
 load_dotenv()   # populate the environment from a local .env
 
-_CONFIG_DIR = Path("config")
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_CONFIG_DIR = _PROJECT_ROOT / "config"
 _PARAM_PATH = _CONFIG_DIR / "param.yaml"
 _PATTERNS_PATH = _CONFIG_DIR / "patterns.yaml"
 _MODELS_PATH = _CONFIG_DIR / "models.yaml"   # chat LLM provider + model names

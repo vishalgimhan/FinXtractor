@@ -115,6 +115,17 @@ def normalize(stmt: Statement, use_llm: bool = False) -> CanonicalStatement:
     return cs
 
 
+def merge_raw(income: Statement, *others: Statement) -> Statement:
+    """Combine raw statements (line items + provenance) into one — income first so
+    its metadata leads. The single explainability substrate `build_graph` consumes,
+    replacing per-page re-extraction."""
+    merged = income.model_copy(deep=True)
+    for other in others:
+        merged.line_items.extend(other.line_items)
+        merged.statement_pages = sorted(set(merged.statement_pages) | set(other.statement_pages))
+    return merged
+
+
 def merge(income: CanonicalStatement, balance: CanonicalStatement) -> CanonicalStatement:
     """Combine income-statement and balance-sheet canonical lines into one
     statement. Income metadata wins; balance lines fill accounts income lacks."""

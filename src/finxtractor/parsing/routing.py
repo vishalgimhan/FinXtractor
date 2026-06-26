@@ -4,15 +4,9 @@ from loguru import logger
 
 from ..config import get_markers, get_pattern
 from .text import Page
-# TOC/outline logic lives in outline.py; re-exported here for back-compat.
-from .outline import (
-    _matches,
-    find_from_toc,
-    page_from_outline,
-    page_from_printed_toc,
-    note_pages_from_toc,
-    _find_contents_page,
-)
+# TOC/outline logic lives in outline.py. `_matches`/`find_from_toc` are used here;
+# `note_pages_from_toc` is re-exported for note_tables.py.
+from .outline import _matches, find_from_toc, note_pages_from_toc
 
 # What an income-statement title looks like (in an outline entry or TOC line).
 INCOME_MARKERS = get_markers("income")

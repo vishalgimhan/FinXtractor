@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Optional, TypedDict
+from ..schemas import Statement
 from ..schemas.canonical import CanonicalStatement
 from ..validate.results import CheckResult, ValueConfidence, ValidationReport
 from ..parsing.outline import PageIndex
@@ -17,6 +18,7 @@ class PipelineState(TypedDict, total=False):
     text_layer: str                 # "ok" | "sparse" | "none" (scanned) -> drives OCR/VLM routing
     resolution_error: Optional[str] # set when no statement page could be located
     page_index: Optional[PageIndex]  # unified title->page index (agentic TOC + outline)
+    raw_statement: Optional[Statement]   # merged raw extraction (line items + provenance) for explainability
     statement: Optional[CanonicalStatement]
     checks: list[CheckResult]
     confidences: list[ValueConfidence]

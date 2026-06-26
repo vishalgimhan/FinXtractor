@@ -38,6 +38,6 @@ def get_vlm_extractor() -> VlmExtractor:
 
 
 def extract_with_vlm(pdf: Path | str, page_number: int) -> Statement:
-    """Convenience wrapper used by the extraction fallback path
-    (parsing.statements.extract_statement)."""
+    """Convenience wrapper for the VLM extraction tier (used by the vlm node via
+    agents.vlm_agent.extract_with_vlm_agent)."""
     return get_vlm_extractor().extract(pdf, page_number)

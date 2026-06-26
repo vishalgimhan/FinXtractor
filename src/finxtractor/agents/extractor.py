@@ -22,7 +22,7 @@ from .tools.extractor import ExtractorContext, build_extractor_tools
 from ..config import get_param
 from ..parsing.docling_parser import parse_statement, table_confidence
 from ..parsing.notes import resolve_line_item_notes
-from ..normalize.normalize import normalize, merge
+from ..normalize.normalize import normalize, merge, merge_raw
 
 
 def extract(pdf: Path | str, income_page: int, bs_page: int | None = None,
@@ -77,8 +77,9 @@ def _deterministic_extract(ctx: ExtractorContext) -> None:
 
 def _finalize(ctx: ExtractorContext) -> dict:
     """Authoritative assembly: auto-normalize any usable raw the agent didn't,
-    merge the canonicals, and escalate any page with no canonical to the vlm
-    node. Income is the merge base so its metadata wins."""
+    merge the canonicals, surface the merged raw statement (for explainability),
+    and escalate any page with no canonical to the vlm node. Income is the merge
+    base so its metadata wins."""
     floor = get_param("vlm", "confidence_floor", default=0.0)
     for kind in ctx.pages:
         if kind not in ctx.canonical and kind in ctx.raw:
@@ -88,12 +89,13 @@ def _finalize(ctx: ExtractorContext) -> dict:
                 ctx.canonical[kind] = normalize(raw)
 
     stmt = _assemble(ctx)
+    raw_stmt = _assemble_raw(ctx)
     pending = {k: ctx.pages[k] for k in ctx.pages if k not in ctx.canonical}
     if pending:
         logger.info("Extractor escalating to VLM node (extract): {}", list(pending))
-        return {"statement": stmt, "route": "vlm",
+        return {"statement": stmt, "raw_statement": raw_stmt, "route": "vlm",
                 "vlm_task": "extract", "vlm_extract_pages": pending}
-    return {"statement": stmt, "route": "validate"}
+    return {"statement": stmt, "raw_statement": raw_stmt, "route": "validate"}
 
 
 def _assemble(ctx: ExtractorContext):
@@ -105,3 +107,13 @@ def _assemble(ctx: ExtractorContext):
     for c in canons[1:]:
         stmt = merge(stmt, c)
     return stmt
+
+
+def _assemble_raw(ctx: ExtractorContext):
+    """Merge the best raw extractions (income first) into one Statement, with
+    note refs resolved — the explainability substrate that `build_graph` consumes.
+    Pages still pending VLM are folded in later by the vlm node."""
+    raws = [ctx.raw[k] for k in ("income", "balance") if k in ctx.raw]
+    if not raws:
+        return None
+    return merge_raw(*raws)

@@ -20,7 +20,7 @@ from loguru import logger
 from .state import PipelineState
 from ..agents.vlm_agent import locate_with_vlm, extract_with_vlm_agent
 from ..parsing.notes import resolve_line_item_notes
-from ..normalize.normalize import normalize, merge
+from ..normalize.normalize import normalize, merge, merge_raw
 
 
 def vlm_node(state: PipelineState) -> dict:
@@ -66,6 +66,7 @@ def _extract(state: PipelineState) -> dict:
     pending = state.get("vlm_extract_pages", {})
     partial = state.get("statement")
     new: dict[str, object] = {}
+    raws: list = []                          # VLM-read raw statements, for the explainability substrate
     for kind in ("income", "balance"):
         page = pending.get(kind)
         if page is None:
@@ -75,6 +76,7 @@ def _extract(state: PipelineState) -> dict:
             logger.warning("VLM extraction returned nothing for {} page {}", kind, page)
             continue
         resolve_line_item_notes(raw)
+        raws.append(raw)
         new[kind] = normalize(raw)
 
     # Assemble income-first so its metadata wins; fold the text-extracted partial in.
@@ -92,4 +94,9 @@ def _extract(state: PipelineState) -> dict:
     stmt = pieces[0]
     for p in pieces[1:]:
         stmt = merge(stmt, p)
-    return {"statement": stmt, "route": "validate"}
+    # Fold the VLM-read raws into the running raw statement (extractor seeded it).
+    out = {"statement": stmt, "route": "validate"}
+    raw_prev = state.get("raw_statement")
+    if raws:
+        out["raw_statement"] = merge_raw(*( ([raw_prev] if raw_prev else []) + raws ))
+    return out
