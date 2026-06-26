@@ -849,25 +849,58 @@ def run_streaming_pipeline(api_url: str, pdf_path: str, max_retries: int) -> dic
         list_ph.markdown(_stage_checklist_md(status, deltas))
 
     _render()
+
+    st.markdown("#### 📝 Execution Log")
+    status_container = st.status("⏳ Pipeline executing...", expanded=True)
+
     final_state = None
     try:
         for event, data in stream_pipeline_events(api_url, pdf_path, max_retries):
             if event == "start":
                 status["resolver"] = "active"
+                status_container.write("🚀 Started LangGraph pipeline execution...")
+            elif event == "step":
+                st_type = data.get("type")
+                name = data.get("name")
+                if st_type == "tool_start":
+                    inputs = data.get("inputs", {})
+                    inputs_str = ", ".join(f"{k}={v}" for k, v in inputs.items()) if isinstance(inputs, dict) else str(inputs)
+                    status_container.write(f"🛠️ Call Tool `{name}({inputs_str})`...")
+                elif st_type == "tool_end":
+                    output = str(data.get("output", {}))
+                    output_str = output[:150] + ("..." if len(output) > 150 else "")
+                    status_container.write(f"  👉 Tool `{name}` finished → `{output_str}`")
+                elif st_type == "llm_start":
+                    status_container.write(f"🤖 Agent `{name}` querying LLM...")
             elif event == "stage":
                 node = data.get("node")
                 if node in status:
                     status[node] = data.get("status", "done")
                     if data.get("deltas"):
                         deltas[node] = data["deltas"]
+                
+                # Dynamic active node tracking for the visual graph
+                if node == "resolver" and status["resolver"] == "done":
+                    status["extractor"] = "active"
+                elif node == "extractor" and status["extractor"] == "done":
+                    status["validator"] = "active"
+                elif node == "validator" and status["validator"] == "done":
+                    route = deltas.get("validator", {}).get("route")
+                    if route in status:
+                        status[route] = "active"
+
+                status_container.write(f"🏁 **{data.get('label')}** stage completed (`{status[node]}`)")
             elif event == "done":
                 final_state = hydrate_state(data)
+                status_container.update(label="✅ Pipeline Completed Successfully!", state="complete", expanded=False)
             elif event == "error":
                 st.error(f"Pipeline error: {data.get('message')}")
+                status_container.update(label="❌ Pipeline Failed!", state="error")
                 return None
             _render()
     except Exception as e:
         st.error(f"Could not reach the streaming API at {api_url}: {e}")
+        status_container.update(label="❌ Connection Error!", state="error")
         return None
     return final_state
 
@@ -875,6 +908,8 @@ def run_streaming_pipeline(api_url: str, pdf_path: str, max_retries: int) -> dic
 # Sidebar layout
 st.sidebar.image("https://img.icons8.com/color/96/bullish.png", width=64)
 st.sidebar.markdown("# FinXtractor CLI Control")
+
+# Scan for available PDFs dynamically
 
 # Scan for available PDFs dynamically
 pdf_dir = Path("data/reports")
@@ -912,10 +947,73 @@ if run_pipeline_clicked:
             st.rerun()
         else:
             st.sidebar.error("No cached extraction found for this PDF.")
-    elif exec_mode == "Live Pipeline (Streaming API)":
-        pdf_path = f"data/reports/{selected_pdf}"
+    else:
+        # Set flags to run the pipeline
+        st.session_state.trigger_live_run = True
+        st.rerun()
+
+# Initialize session state for statements if not present
+if "pipeline_states" not in st.session_state:
+    st.session_state.pipeline_states = {}
+
+# Load baseline statement into session state if not already loaded
+if selected_pdf not in st.session_state.pipeline_states:
+    cached = load_cache(selected_pdf)
+    if cached is not None:
+        st.session_state.pipeline_states[selected_pdf] = cached
+    else:
+        st.session_state.pipeline_states[selected_pdf] = {
+            "pdf": f"data/reports/{selected_pdf}",
+            "income_page": None,
+            "bs_page": None,
+            "income_page_source": None,
+            "bs_page_source": None,
+            "text_layer": "ok",
+            "statement": None,
+            "checks": [],
+            "confidences": [],
+            "report": None,
+            "credit_report": None
+        }
+
+active_state = st.session_state.pipeline_states[selected_pdf]
+current_stmt = active_state.get("statement")
+
+# Helper to render a filtered statement ledger table
+def render_statement_table(stmt, filter_keys):
+    rows = []
+    for k in filter_keys:
+        line = stmt.lines.get(k)
+        if not line:
+            continue
+        val_cur = f"${float(line.value_current):,}" if line.value_current is not None else "-"
+        val_pri = f"${float(line.value_prior):,}" if line.value_prior is not None else "-"
+        rows.append({
+            "Canonical Account": k.replace("_", " ").upper(),
+            f"Current Year ({stmt.year_current})": val_cur,
+            f"Prior Year ({stmt.year_prior})": val_pri,
+            "Raw Labels Extracted": ", ".join(line.source_labels),
+            "Note Refs": ", ".join(nr.key() for nr in line.note_refs) or "None",
+            "Extraction Source": line.mapped_by.upper()
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+# Check if trigger_live_run is True and execute pipeline
+if st.session_state.get("trigger_live_run"):
+    st.session_state.trigger_live_run = False
+    pdf_path = f"data/reports/{selected_pdf}"
+    
+    st.markdown('<div class="sandbox-banner">🟢 <b>Running Live Extraction:</b> LangGraph pipeline executing...</div>', unsafe_allow_html=True)
+    
+    col_title, col_logo = st.columns([0.85, 0.15])
+    with col_title:
+        st.markdown('<h1 class="main-title">FinXtractor Credit Risk Dashboard</h1>', unsafe_allow_html=True)
+        st.markdown(f"## 🔄 Live Pipeline Status & Execution Updates")
+        st.markdown(f"**Target Company annual report file:** `{selected_pdf}`")
+        
+    if exec_mode == "Live Pipeline (Streaming API)":
         if not Path(pdf_path).exists():
-            st.sidebar.error(f"PDF not found at {pdf_path}")
+            st.error(f"PDF not found at {pdf_path}")
         else:
             final_state = run_streaming_pipeline(api_url, pdf_path, max_retries)
             if final_state is not None:
@@ -938,20 +1036,19 @@ if run_pipeline_clicked:
                 st.session_state.last_run_success = True
                 st.session_state.last_run_route = final_state.get("route")
                 st.session_state.last_run_retries = final_state.get("retries", 0)
-                st.sidebar.success("Live pipeline stream finished!")
+                st.success("Live pipeline stream finished successfully!")
                 st.rerun()
-    else:
-        with st.sidebar.spinner("Running LangGraph Pipeline..."):
+    else: # Live Pipeline (Requires Ollama)
+        with st.spinner("Running LangGraph Pipeline..."):
             try:
                 from finxtractor.orchestration.graph import compiled_pipeline
                 import uuid
                 
                 graph = compiled_pipeline()
                 config = {"configurable": {"thread_id": str(uuid.uuid4())}}
-                pdf_path = f"data/reports/{selected_pdf}"
                 
                 if not Path(pdf_path).exists():
-                    st.sidebar.error(f"PDF not found at {pdf_path}")
+                    st.error(f"PDF not found at {pdf_path}")
                 else:
                     initial = {
                         "pdf": pdf_path,
@@ -981,41 +1078,15 @@ if run_pipeline_clicked:
                     st.session_state.last_run_success = True
                     st.session_state.last_run_route = final.get("route")
                     st.session_state.last_run_retries = final.get("retries", 0)
-                    
-                    st.sidebar.success("Pipeline finished successfully!")
+                    st.success("Pipeline finished successfully!")
                     st.rerun()
             except Exception as e:
-                st.sidebar.error(f"Pipeline Run Failed: {str(e)}")
+                st.error(f"Pipeline Run Failed: {str(e)}")
+    st.stop()
 
-# Initialize session state for statements if not present
-if "pipeline_states" not in st.session_state:
-    st.session_state.pipeline_states = {}
-
-# Load baseline statement into session state if not already loaded
-if selected_pdf not in st.session_state.pipeline_states:
-    cached = load_cache(selected_pdf)
-    if cached is not None:
-        st.session_state.pipeline_states[selected_pdf] = cached
-    else:
-        st.session_state.pipeline_states[selected_pdf] = {
-            "pdf": f"data/reports/{selected_pdf}",
-            "income_page": None,
-            "bs_page": None,
-            "income_page_source": None,
-            "bs_page_source": None,
-            "text_layer": "ok",
-            "statement": None,
-            "checks": [],
-            "confidences": [],
-            "report": None,
-            "credit_report": None
-        }
-
-active_state = st.session_state.pipeline_states[selected_pdf]
-current_stmt = active_state.get("statement")
-
+# For other pages, ensure statement has been extracted/loaded
 if current_stmt is None:
-    st.warning("⚠️ No extraction results found for this PDF. Please run the LangGraph pipeline using the sidebar button to extract and normalize the statement data.")
+    st.warning("⚠️ No extraction results found for this PDF. Please run the LangGraph pipeline using the sidebar button or switch to the 'Live Pipeline Status' page to trigger an extraction.")
     st.stop()
 
 # Banner based on run mode
@@ -1030,8 +1101,24 @@ with col_title:
     st.markdown('<h1 class="main-title">FinXtractor Credit Risk Dashboard</h1>', unsafe_allow_html=True)
     st.markdown(f"**Target Company annual report file:** `{selected_pdf}` | **Reporting Currency:** `{current_stmt.currency}` | **Current Year:** `{current_stmt.year_current}` | **Prior Year:** `{current_stmt.year_prior}`")
 
+def _ratio_provenance(r, stmt) -> str:
+    """How each input feeding a ratio was obtained, for the ratio table."""
+    # Current ratio on an unclassified (bank) balance sheet: name the reason.
+    if r.value is None and r.name == "current_ratio" and stmt is not None:
+        ca = getattr(stmt, "lines", {}).get("current_assets")
+        if ca is not None and getattr(ca, "mapped_by", None) == "unclassified":
+            return "N/A — unclassified balance sheet"
+    pretty = {
+        "derived": "derived", "llm_classified": "agent-classified",
+        "unclassified": "unclassified", "fuzzy": "reported (fuzzy)",
+        "llm": "LLM-mapped",
+    }
+    tags = [f"{i.account.replace('_', ' ')}: {pretty[i.mapped_by]}"
+            for i in r.inputs if getattr(i, "mapped_by", None) in pretty]
+    return "; ".join(tags) if tags else "reported"
+
+
 # ----------------- LIVE METRICS COMPUTATION -----------------
-# Check if we have a pre-computed report from live pipeline run
 credit = active_state.get("credit_report")
 if credit:
     ratios = credit.ratios
@@ -1048,60 +1135,61 @@ else:
 
 flagged_checks = sum(1 for c in checks if c.status.value == "fail")
 
-# ----------------- KPI BLOCK PANELS -----------------
-kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
+# Render active page content
+if True:
+    # ----------------- KPI BLOCK PANELS -----------------
+    kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
 
-with kpi_col1:
-    grade_class = f"grade-{composite.grade.lower()}" if composite.grade else "grade-f"
-    st.markdown(f"""
-    <div class="metric-card {grade_class}">
-        <span class="metric-label" style="font-size:1.1rem; color:#888;">Credit Grade</span>
-        <h2 style="font-size:3.5rem; margin:10px 0; color:#fff;">{composite.grade or 'N/A'}</h2>
-        <span style="font-size:0.9rem; color:#888;">Threshold-Based Grade</span>
-    </div>
-    """, unsafe_allow_html=True)
+    with kpi_col1:
+        grade_class = f"grade-{composite.grade.lower()}" if composite.grade else "grade-f"
+        st.markdown(f"""
+        <div class="metric-card {grade_class}">
+            <span class="metric-label" style="font-size:1.1rem; color:#888;">Credit Grade</span>
+            <h2 style="font-size:3.5rem; margin:10px 0; color:#fff;">{composite.grade or 'N/A'}</h2>
+            <span style="font-size:0.9rem; color:#888;">Threshold-Based Grade</span>
+        </div>
+        """, unsafe_allow_html=True)
 
-with kpi_col2:
-    st.markdown(f"""
-    <div class="metric-card" style="border-left: 5px solid #3b82f6;">
-        <span class="metric-label" style="font-size:1.1rem; color:#888;">Composite Score</span>
-        <h2 style="font-size:3.5rem; margin:10px 0; color:#fff;">{float(composite.score_0_100 or 0):.1f}</h2>
-        <span style="font-size:0.9rem; color:#888;">Scale: 0 - 100 (Weighted)</span>
-    </div>
-    """, unsafe_allow_html=True)
+    with kpi_col2:
+        st.markdown(f"""
+        <div class="metric-card" style="border-left: 5px solid #3b82f6;">
+            <span class="metric-label" style="font-size:1.1rem; color:#888;">Composite Score</span>
+            <h2 style="font-size:3.5rem; margin:10px 0; color:#fff;">{float(composite.score_0_100 or 0):.1f}</h2>
+            <span style="font-size:0.9rem; color:#888;">Scale: 0 - 100 (Weighted)</span>
+        </div>
+        """, unsafe_allow_html=True)
 
-with kpi_col3:
-    zone_class = f"zone-{altman.zone.value.lower()}" if altman.zone else "zone-grey"
-    zone_label = altman.zone.value.upper() if altman.zone else "UNKNOWN"
-    z_val = f"{float(altman.z_double_prime):.2f}" if altman.z_double_prime is not None else "N/A"
-    
-    st.markdown(f"""
-    <div class="metric-card" style="border-left: 5px solid #a855f7;">
-        <span class="metric-label" style="font-size:1.1rem; color:#888;">Altman Z'' Score</span>
-        <h2 style="font-size:3.5rem; margin:10px 0;" class="{zone_class}">{z_val}</h2>
-        <span style="font-size:0.95rem; font-weight:600;" class="{zone_class}">{zone_label} ZONE</span>
-    </div>
-    """, unsafe_allow_html=True)
+    with kpi_col3:
+        zone_class = f"zone-{altman.zone.value.lower()}" if altman.zone else "zone-grey"
+        zone_label = altman.zone.value.upper() if altman.zone else "UNKNOWN"
+        z_val = f"{float(altman.z_double_prime):.2f}" if altman.z_double_prime is not None else "N/A"
+        
+        st.markdown(f"""
+        <div class="metric-card" style="border-left: 5px solid #a855f7;">
+            <span class="metric-label" style="font-size:1.1rem; color:#888;">Altman Z'' Score</span>
+            <h2 style="font-size:3.5rem; margin:10px 0;" class="{zone_class}">{z_val}</h2>
+            <span style="font-size:0.95rem; font-weight:600;" class="{zone_class}">{zone_label} ZONE</span>
+        </div>
+        """, unsafe_allow_html=True)
 
-with kpi_col4:
-    audit_border = "#ef4444" if flagged_checks > 0 else "#10b981"
-    st.markdown(f"""
-    <div class="metric-card" style="border-left: 5px solid {audit_border};">
-        <span class="metric-label" style="font-size:1.1rem; color:#888;">Arithmetic Audits</span>
-        <h2 style="font-size:3.5rem; margin:10px 0; color:#fff;">{flagged_checks}</h2>
-        <span style="font-size:0.9rem; color:#888;">Flagged validation failures</span>
-    </div>
-    """, unsafe_allow_html=True)
+    with kpi_col4:
+        audit_border = "#ef4444" if flagged_checks > 0 else "#10b981"
+        st.markdown(f"""
+        <div class="metric-card" style="border-left: 5px solid {audit_border};">
+            <span class="metric-label" style="font-size:1.1rem; color:#888;">Arithmetic Audits</span>
+            <h2 style="font-size:3.5rem; margin:10px 0; color:#fff;">{flagged_checks}</h2>
+            <span style="font-size:0.9rem; color:#888;">Flagged validation failures</span>
+        </div>
+        """, unsafe_allow_html=True)
 
-st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
 
-# ----------------- APP TAB PANELS -----------------
-tab_credit, tab_stmts, tab_verification, tab_graph = st.tabs([
-    "🎯 Credit Risk Report", 
-    "📁 Interactive Statements & Simulator", 
-    "🔍 Verification & Provenance", 
-    "🕸️ Notes Knowledge Graph"
-])
+    # ----------------- APP TAB PANELS -----------------
+    tab_credit, tab_verification, tab_graph = st.tabs([
+        "🎯 Credit Risk Report", 
+        "🔍 Verification & Provenance", 
+        "🕸️ Notes Knowledge Graph"
+    ])
 
 # ================= TAB 1: CREDIT RISK ANALYSIS =================
 with tab_credit:
@@ -1119,9 +1207,15 @@ with tab_credit:
                 "Ratio Name": r.name.replace("_", " ").title(),
                 "Formula": r.formula,
                 "Computed Value": val_str,
+                "Provenance": _ratio_provenance(r, current_stmt),
                 "Audit Notes": r.note or "Passed input verification"
             })
         st.table(pd.DataFrame(ratio_rows))
+        st.caption("Provenance shows how each input was obtained: *reported* (from a "
+                   "stated line/subtotal), *derived* (EBIT = profit before tax + "
+                   "interest expense), *agent-classified* (current items summed by the "
+                   "classifier), or *N/A — unclassified* (a bank/liquidity-ordered "
+                   "balance sheet with no current/non-current split).")
         
         st.markdown("### ⚖️ Score Contributions & Weights")
         weight_rows = []
@@ -1209,83 +1303,9 @@ with tab_credit:
             st.markdown(f"**Outlook:** {credit.assessment.outlook}")
 
 
-# ================= TAB 2: INTERACTIVE STATEMENTS & SIMULATOR =================
-with tab_stmts:
-    st.markdown("## Interactive Financial Statements & Simulator")
-    st.write("Below are the canonicalized account balances. You can **simulate value overrides** to perform what-if stress tests and instantly re-run the credit risk engine.")
-    
-    st.markdown("### 🛠️ What-If Override Simulator")
-    
-    sim_col1, sim_col2, sim_col3 = st.columns(3)
-    
-    with sim_col1:
-        st.markdown("#### Income Statement items")
-        sim_rev = st.number_input("Revenue", value=float(current_stmt.get(CanonicalAccount.REVENUE).value_current) if current_stmt.get(CanonicalAccount.REVENUE) else 0.0, step=1000000.0, format="%f")
-        sim_ebit = st.number_input("EBIT (Operating Profit)", value=float(current_stmt.get(CanonicalAccount.EBIT).value_current) if current_stmt.get(CanonicalAccount.EBIT) else 0.0, step=1000000.0, format="%f")
-        sim_int = st.number_input("Interest Expense", value=float(current_stmt.get(CanonicalAccount.INTEREST_EXPENSE).value_current) if current_stmt.get(CanonicalAccount.INTEREST_EXPENSE) else 0.0, step=1000000.0, format="%f")
-        sim_tax = st.number_input("Income Tax Expense", value=float(current_stmt.get(CanonicalAccount.INCOME_TAX_EXPENSE).value_current) if current_stmt.get(CanonicalAccount.INCOME_TAX_EXPENSE) else 0.0, step=1000000.0, format="%f")
-        sim_net = st.number_input("Net Profit / (Loss)", value=float(current_stmt.get(CanonicalAccount.NET_PROFIT).value_current) if current_stmt.get(CanonicalAccount.NET_PROFIT) else 0.0, step=1000000.0, format="%f")
-        
-    with sim_col2:
-        st.markdown("#### Balance Sheet items")
-        sim_ca = st.number_input("Current Assets", value=float(current_stmt.get(CanonicalAccount.CURRENT_ASSETS).value_current) if current_stmt.get(CanonicalAccount.CURRENT_ASSETS) else 0.0, step=1000000.0, format="%f")
-        sim_ta = st.number_input("Total Assets", value=float(current_stmt.get(CanonicalAccount.TOTAL_ASSETS).value_current) if current_stmt.get(CanonicalAccount.TOTAL_ASSETS) else 0.0, step=1000000.0, format="%f")
-        sim_cl = st.number_input("Current Liabilities", value=float(current_stmt.get(CanonicalAccount.CURRENT_LIABILITIES).value_current) if current_stmt.get(CanonicalAccount.CURRENT_LIABILITIES) else 0.0, step=1000000.0, format="%f")
-        sim_tl = st.number_input("Total Liabilities", value=float(current_stmt.get(CanonicalAccount.TOTAL_LIABILITIES).value_current) if current_stmt.get(CanonicalAccount.TOTAL_LIABILITIES) else 0.0, step=1000000.0, format="%f")
-        sim_eq = st.number_input("Total Equity", value=float(current_stmt.get(CanonicalAccount.TOTAL_EQUITY).value_current) if current_stmt.get(CanonicalAccount.TOTAL_EQUITY) else 0.0, step=1000000.0, format="%f")
-        sim_re = st.number_input("Retained Earnings", value=float(current_stmt.get(CanonicalAccount.RETAINED_EARNINGS).value_current) if current_stmt.get(CanonicalAccount.RETAINED_EARNINGS) else 0.0, step=1000000.0, format="%f")
-        
-    with sim_col3:
-        st.markdown("#### Controls")
-        st.write("Click below to write override values into the active session statement and trigger recalculations across the entire credit model.")
-        apply_overrides = st.button("Apply Overrides & Recompute Score", use_container_width=True)
-        reset_stmt = st.button("Reset Statement to Baseline", use_container_width=True)
-        
-        if apply_overrides:
-            for acct, val in [
-                (CanonicalAccount.REVENUE, sim_rev),
-                (CanonicalAccount.EBIT, sim_ebit),
-                (CanonicalAccount.INTEREST_EXPENSE, sim_int),
-                (CanonicalAccount.INCOME_TAX_EXPENSE, sim_tax),
-                (CanonicalAccount.NET_PROFIT, sim_net),
-                (CanonicalAccount.CURRENT_ASSETS, sim_ca),
-                (CanonicalAccount.TOTAL_ASSETS, sim_ta),
-                (CanonicalAccount.CURRENT_LIABILITIES, sim_cl),
-                (CanonicalAccount.TOTAL_LIABILITIES, sim_tl),
-                (CanonicalAccount.TOTAL_EQUITY, sim_eq),
-                (CanonicalAccount.RETAINED_EARNINGS, sim_re)
-            ]:
-                line = current_stmt.get(acct)
-                if line:
-                    line.value_current = Decimal(str(val))
-            active_state["credit_report"] = None
-            st.success("Overrides applied! All panels, ratios, Altman scores, and validation checks updated.")
-            st.rerun()
-            
-        if reset_stmt:
-            cache_file = Path("outputs") / f"{selected_pdf}.json"
-            if cache_file.exists():
-                cache_file.unlink()
-            initialize_default_caches()
-            if selected_pdf in st.session_state.pipeline_states:
-                del st.session_state.pipeline_states[selected_pdf]
-            st.info("Statement reset to default baseline.")
-            st.rerun()
-
-    st.markdown("### 📋 Canonical Statement Ledger")
-    ledger_rows = []
-    for k, line in current_stmt.lines.items():
-        val_cur = f"${float(line.value_current):,}" if line.value_current is not None else "-"
-        val_pri = f"${float(line.value_prior):,}" if line.value_prior is not None else "-"
-        ledger_rows.append({
-            "Canonical Account": k.replace("_", " ").upper(),
-            f"Current Year ({current_stmt.year_current})": val_cur,
-            f"Prior Year ({current_stmt.year_prior})": val_pri,
-            "Raw Labels Extracted": ", ".join(line.source_labels),
-            "Note Refs": ", ".join(nr.key() for nr in line.note_refs) or "None",
-            "Extraction Source": line.mapped_by.upper()
-        })
-    st.dataframe(pd.DataFrame(ledger_rows), use_container_width=True, hide_index=True)
+# ================= TAB 2: INTERACTIVE STATEMENTS & SIMULATOR (MOVED TO SEPARATE PAGE) =================
+# The interactive statement tables, full ledger, and override simulator have been moved to
+# the "📁 Extracted Statements" page to avoid NameError issues and improve layout structure.
 
 
 # ================= TAB 3: VERIFICATION & PROVENANCE =================
@@ -1368,7 +1388,13 @@ with tab_graph:
     text_layer = active_state.get("text_layer", "ok")
     
     G = None
-    if pdf_path and income_page:
+    build_real = False
+    if exec_mode == "Sandbox Cache (Immediate)":
+        build_real = st.checkbox("🔍 Load AI Notes Knowledge Graph (takes ~20 seconds to parse PDF)", value=False)
+    else:
+        build_real = True
+        
+    if build_real and pdf_path and income_page:
         G = get_real_graph(pdf_path, income_page, bs_page, text_layer)
         
     edges_list = []
@@ -1383,7 +1409,7 @@ with tab_graph:
                 edges_list.append({
                     "Financial Statement Account": acct_node,
                     "Linked Note Identifier": f"{note_node}{sub_str}",
-                    "Extraction Method": G.nodes[u].get("account", "unmapped").upper()
+                    "Extraction Method": (G.nodes[u].get("account") or "unmapped").upper()
                 })
     else:
         # Fallback to statement note references if no real graph could be built
@@ -1427,6 +1453,13 @@ with tab_graph:
                     sub_rows = [G.nodes[s]["row"] for _, s, e in G.out_edges(nid, data=True)
                                 if e["rel"] == "has-sub-item"]
                     if sub_rows:
+                        node = G.nodes[nid]
+                        _tier_label = {"tableformer": "TableFormer (text)",
+                                       "tableformer_ocr": "TableFormer + OCR",
+                                       "vlm": "Vision model (VLM)"}.get(node.get("tier"), node.get("tier") or "—")
+                        st.caption(f"Linked note table — page {node.get('page', '?')}, "
+                                   f"extracted via **{_tier_label}**. "
+                                   f"Referenced by {len(linking_accounts)} account(s) above.")
                         df_rows = pd.DataFrame(sub_rows)
                         st.dataframe(df_rows, use_container_width=True, hide_index=True)
                         has_real_breakdown = True
@@ -1452,3 +1485,65 @@ with tab_graph:
             
     else:
         st.info("No statement-to-note linking relations resolved for this document. Note-linker links note reference indices (e.g. Note 3, Note 4) to statement figures.")
+
+# ================= SECTION 2: EXTRACTED FINANCIAL STATEMENTS =================
+st.markdown("---")
+st.markdown("## 📁 Extracted Financial Statements")
+st.write("Below are the canonicalized financial statement tables extracted from the report.")
+
+tab_inc, tab_bs, tab_ledger = st.tabs([
+    "📋 Income Statement",
+    "📋 Balance Sheet",
+    "📋 Full Canonical Ledger"
+])
+
+with tab_inc:
+    st.markdown("### 📋 Income Statement (Canonical Mapping)")
+    inc_keys = ["revenue", "interest_expense", "ebit", "profit_before_tax", "income_tax_expense", "net_profit"]
+    render_statement_table(current_stmt, inc_keys)
+    
+with tab_bs:
+    st.markdown("### 📋 Balance Sheet (Canonical Mapping)")
+    bs_keys = ["current_assets", "total_assets", "current_liabilities", "total_liabilities", "total_equity", "retained_earnings"]
+    render_statement_table(current_stmt, bs_keys)
+    
+with tab_ledger:
+    st.markdown("### 📋 Full Canonical Statement Ledger")
+    ledger_rows = []
+    for k, line in current_stmt.lines.items():
+        val_cur = f"${float(line.value_current):,}" if line.value_current is not None else "-"
+        val_pri = f"${float(line.value_prior):,}" if line.value_prior is not None else "-"
+        ledger_rows.append({
+            "Canonical Account": k.replace("_", " ").upper(),
+            f"Current Year ({current_stmt.year_current})": val_cur,
+            f"Prior Year ({current_stmt.year_prior})": val_pri,
+            "Raw Labels Extracted": ", ".join(line.source_labels),
+            "Note Refs": ", ".join(nr.key() for nr in line.note_refs) or "None",
+            "Extraction Source": line.mapped_by.upper()
+        })
+    st.dataframe(pd.DataFrame(ledger_rows), use_container_width=True, hide_index=True)
+
+# ================= SECTION 3: LANGGRAPH PIPELINE TOPOLOGY =================
+st.markdown("---")
+with st.expander("🔗 LangGraph Pipeline Execution Topology"):
+    st.write("Below is the execution flow graph and status checklist showing how the LangGraph orchestrator processes the document.")
+    
+    status = {n: "pending" for n, _, _ in PIPELINE_STAGES}
+    if st.session_state.get("last_run_success"):
+        for n in status:
+            status[n] = "done"
+            
+    col_g, col_l = st.columns([0.55, 0.45])
+    col_g.graphviz_chart(_pipeline_dot(status), use_container_width=True)
+    
+    # Build checklist md
+    deltas = {}
+    if active_state.get("income_page"):
+        deltas["resolver"] = {"income_page": active_state.get("income_page"), "bs_page": active_state.get("bs_page")}
+    if active_state.get("report"):
+        r = active_state.get("report")
+        deltas["validator"] = {"checks_total": len(r.checks), "checks_failed": r.flagged_count}
+    if active_state.get("credit_report"):
+        c = active_state.get("credit_report")
+        deltas["scoring"] = {"grade": c.composite.grade}
+    col_l.markdown(_stage_checklist_md(status, deltas))

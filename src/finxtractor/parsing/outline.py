@@ -4,6 +4,7 @@ Two mechanisms, best-first: the PDF's embedded outline (bookmarks), then a
 printed 'Contents' page (mapping printed page numbers to physical indices via a
 detected offset). Also resolves note numbers to their physical pages.
 """
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -18,6 +19,13 @@ from .text import Page
 
 # A line that is nothing but a small integer (a printed page number, not a year).
 _STANDALONE_INT = get_pattern("standalone_int")
+
+# An explicit page footer, the most reliable printed-page signal: 'Page 5 of 82'
+# (whitespace spans newlines, so 'Page\n5 of 82' matches), or a line that is just
+# 'Page 5'. Preferred over a bare standalone integer, which on a corrupt text
+# layer is often a stray table value.
+_FOOTER_PAGE_OF = re.compile(r"page\s+(\d+)\s+of\s+\d+", re.IGNORECASE)
+_FOOTER_PAGE_LINE = re.compile(r"page\s+(\d+)\s*$", re.IGNORECASE)
 
 
 def _matches(text: str, markers: list[str]) -> bool:
@@ -99,14 +107,27 @@ def _printed_toc_entry_page(text: str, markers: list[str]) -> int | None:
 
 
 def _printed_page_number(text: str) -> int | None:
-    """Best guess of a page's *printed* page number: the last standalone
-    small-integer line (typically the footer)."""
+    """Best guess of a page's *printed* page number: the document's own page
+    numbering, taken as the last standalone small-integer line (or a bare
+    'Page N' footer line).
+
+    Falls back to an explicit 'Page N of M' stamp only when no internal number is
+    present. That stamp counts *physical* pages and can disagree with the
+    document's internal numbering (e.g. CITIGROUP stamps 'Page 8 of 41' on the
+    page its own footer numbers '5'); a printed TOC references the internal
+    number, so the stamp must never override it."""
     candidate = None
     for line in text.splitlines():
-        m = _STANDALONE_INT.match(line)
+        stripped = line.strip()
+        m = _STANDALONE_INT.match(stripped) or _FOOTER_PAGE_LINE.match(stripped)
         if m:
             candidate = int(m.group(1))
-    return candidate
+    if candidate is not None:
+        return candidate
+    m = _FOOTER_PAGE_OF.search(text)
+    if m:
+        return int(m.group(1))
+    return None
 
 
 def _page_offset(pages: list[Page], contents: Page | None) -> int | None:
@@ -122,7 +143,17 @@ def _page_offset(pages: list[Page], contents: Page | None) -> int | None:
             offsets[p.number - printed] += 1
     if not offsets:
         return None
-    return offsets.most_common(1)[0][0]
+    (best, best_count), = offsets.most_common(1)
+    total = sum(offsets.values())
+    # Require a clear plurality. Scattered votes with no majority mean the
+    # printed-number signal is unreliable (e.g. a corrupt text layer where stray
+    # glyph digits look like footers); inventing an offset from that noise is
+    # worse than none, so the caller treats None as offset 0.
+    if best_count < 2 or best_count * 2 <= total:
+        logger.debug("Page offset inconclusive (best {} of {} votes); treating as none",
+                     best_count, total)
+        return None
+    return best
 
 
 def find_contents_page(pages: list[Page]) -> Page | None:

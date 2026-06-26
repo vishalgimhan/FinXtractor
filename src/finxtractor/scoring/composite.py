@@ -65,7 +65,7 @@ def compute_composite(ratios: list[Ratio], altman: AltmanResult) -> CompositeSco
     total_w = sum(active.values()) or Decimal("1")
     blended = sum(subs[k] * (active[k] / total_w) for k in subs)
 
-    score = (blended * 100).quantize(Decimal("0.1"))
+    score = Decimal(blended * 100).quantize(Decimal("0.1"))
     return CompositeScore(score_0_100=score, grade=_grade(score),
-                          components={k: v.quantize(Decimal("0.001")) for k, v in subs.items()},
+                          components={k: Decimal(v).quantize(Decimal("0.001")) for k, v in subs.items()},
                           notes=notes)

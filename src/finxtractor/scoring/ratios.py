@@ -15,6 +15,8 @@ def _input(stmt: CanonicalStatement, account: A, year: str = "current") -> Metri
         account=account.value, value=value,
         page=prov.page if prov else None,
         bbox=prov.bbox if prov else None,
+        mapped_by=line.mapped_by,
+        source_labels=list(line.source_labels),
     )
 
 def _ratio(name: str, formula: str, numerator: MetricInput | None,

@@ -37,7 +37,8 @@ def _add_notes(G: nx.DiGraph, stmt: Statement, note_tables: dict) -> None:
     for n, data in note_tables.items():
         nid = _note_id(n)
         G.add_node(nid, kind="note", number=n,
-                   page=data["page"], found=data["found"])
+                   page=data["page"], found=data["found"],
+                   tier=data.get("tier"))
         for r, row in enumerate(data["rows"]):
             sid = _sub_id(n, r)
             G.add_node(sid, kind="sub_item", row=row)

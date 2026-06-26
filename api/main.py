@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, AsyncIterator
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,9 +42,10 @@ def health() -> dict:
                                         for n, l in NODE_LABELS.items()]}
 
 
-def _run_stream(pdf: str, max_retries: int) -> Iterator[str]:
-    """Drive the compiled graph with stream_mode='updates' and yield SSE frames:
-    a `start` frame, one `stage` frame per node, then a `done` (or `error`)."""
+async def _run_stream(pdf: str, max_retries: int) -> AsyncIterator[str]:
+    """Drive the compiled graph and yield SSE frames:
+    a `start` frame, `step` frames (for tools/LLM calls), `stage` frames (for node updates),
+    then a `done` (or `error`)."""
     graph = compiled_pipeline()
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
@@ -58,9 +59,32 @@ def _run_stream(pdf: str, max_retries: int) -> Iterator[str]:
         "stages": [{"node": n, "label": l} for n, l in NODE_LABELS.items()],
     })
     try:
-        for chunk in graph.stream(initial, config, stream_mode="updates"):
-            for node, update in chunk.items():
-                yield sse("stage", stage_payload(node, update))
+        async for event in graph.astream_events(initial, config, version="v2"):
+            kind = event.get("event")
+            name = event.get("name")
+
+            if kind == "on_tool_start":
+                yield sse("step", {
+                    "type": "tool_start",
+                    "name": name,
+                    "inputs": event["data"].get("input")
+                })
+            elif kind == "on_tool_end":
+                yield sse("step", {
+                    "type": "tool_end",
+                    "name": name,
+                    "output": event["data"].get("output")
+                })
+            elif kind == "on_chat_model_start":
+                yield sse("step", {
+                    "type": "llm_start",
+                    "name": name
+                })
+            elif kind == "on_chain_end" and name in NODE_LABELS:
+                output = event["data"].get("output")
+                if output:
+                    yield sse("stage", stage_payload(name, output))
+
         final = graph.get_state(config).values
         logger.info("Pipeline stream finished for {} (route={})",
                     pdf, final.get("route"))
@@ -71,7 +95,7 @@ def _run_stream(pdf: str, max_retries: int) -> Iterator[str]:
 
 
 @app.get("/pipeline/stream")
-def pipeline_stream(
+async def pipeline_stream(
     pdf: str = Query(..., description="Path to the PDF, e.g. data/reports/CITIGROUP.pdf"),
     max_retries: int = Query(default=_DEFAULT_RETRIES, ge=0, le=5),
 ) -> StreamingResponse:

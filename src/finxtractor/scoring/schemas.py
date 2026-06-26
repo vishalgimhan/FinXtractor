@@ -11,6 +11,9 @@ class MetricInput(BaseModel):
     value: Decimal
     page: Optional[int] = None
     bbox: Optional[tuple[float, float, float, float]] = None
+    mapped_by: Optional[str] = None      # how the value was obtained: alias|fuzzy|llm|
+                                         # derived|llm_classified|unclassified
+    source_labels: list[str] = Field(default_factory=list)  # raw row label(s) behind it
 
 class Ratio(BaseModel):
     name: str

@@ -100,3 +100,66 @@ def build_page_index(pdf: Path | str, pages: list[Page], *,
     entries = _agentic_entries(pages) + entries_from_outline(outline)
     logger.info("Page index for {}: {} entr(ies)", Path(pdf).name, len(entries))
     return PageIndex(entries=entries)
+
+
+def classify_page_is_toc(pdf: Path | str, page: int) -> bool:
+    """Render one page and ask the vision model if it is a Contents / Table of Contents page."""
+    try:
+        import base64
+        from langchain_core.messages import HumanMessage
+        from ..services.vlm import get_vlm_model
+        from ..services.pdf_reader import get_pdf_reader
+        
+        class _IsToc(BaseModel):
+            is_toc: bool
+            
+        model = get_vlm_model().with_structured_output(_IsToc)
+        b64 = base64.b64encode(get_pdf_reader().render_page(pdf, page)).decode()
+        prompt = (
+            "You are shown ONE page of a financial report as an image. Decide if this page "
+            "is the Table of Contents, Contents, or Index page of the report. "
+            "Return true if it lists sections/chapters/pages of the document, and false otherwise."
+        )
+        message = HumanMessage(content=[
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+        ])
+        result = model.invoke([message])
+        return result.is_toc
+    except Exception as e:
+        logger.warning("VLM TOC classify failed on page {}: {}", page, type(e).__name__)
+        return False
+
+
+def find_contents_page_with_fallback(
+    pdf: Path | str, pages: list[Page], text_layer: str
+) -> tuple[int | None, str | None, str | None]:
+    """Locate the Contents page, its source, and its text content.
+    Fallback: Native text -> OCR (pages 1-10) -> VLM (pages 1-10)."""
+    # 1. Native text (if available)
+    if text_layer != "none":
+        contents_page = find_contents_page(pages)
+        if contents_page is not None:
+            logger.info("Located Contents page on page {} via native text", contents_page.number)
+            return contents_page.number, "native_text", contents_page.text
+
+    # 2. OCR (pages 1-10)
+    logger.debug("TOC not found via native text; trying OCR fallback on pages 1-10")
+    from ..services.ocr import ocr_page_text
+    limit = min(len(pages), 10)
+    for i in range(1, limit + 1):
+        text = ocr_page_text(pdf, i)
+        low = text.lower()
+        if "table of contents" in low or ("contents" in low and "page" in low):
+            logger.info("Located Contents page on page {} via OCR", i)
+            return i, "ocr", text
+
+    # 3. VLM (pages 1-10)
+    logger.debug("TOC not found via OCR; trying VLM fallback on pages 1-10")
+    for i in range(1, limit + 1):
+        if classify_page_is_toc(pdf, i):
+            logger.info("Located Contents page on page {} via VLM", i)
+            text = ocr_page_text(pdf, i)
+            return i, "vlm", text
+
+    return None, None, None

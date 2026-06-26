@@ -17,6 +17,33 @@ def label_mapping_prompt(accounts: list[str], label: str) -> str:
     )
 
 
+def current_items_prompt(asset_lines: list[str], liability_lines: list[str]) -> str:
+    """Prompt for classifying balance-sheet rows into current vs non-current.
+
+    Used only when no 'Total current assets/liabilities' subtotal was extracted.
+    The model must also flag an unclassified (liquidity-ordered) balance sheet —
+    e.g. a bank's — where a current/non-current split does not exist and the
+    liquidity ratio is N/A, rather than forcing rows into 'current'."""
+    return (
+        "You classify the rows of a balance sheet (statement of financial "
+        "position) into CURRENT vs NON-CURRENT, so a current ratio can be "
+        "computed. You are given the asset rows and the liability rows, each as "
+        "'label | current-year value'.\n\n"
+        "First decide the PRESENTATION:\n"
+        "- 'classified': the statement separates current from non-current items "
+        "(typical for trading/industrial companies).\n"
+        "- 'unclassified': the statement is ordered by liquidity with NO "
+        "current/non-current distinction (typical for banks and other financial "
+        "institutions). In this case return EMPTY current lists — do NOT guess.\n\n"
+        "If 'classified', list the labels (verbatim, from the input) of the rows "
+        "that are CURRENT assets and CURRENT liabilities. Exclude any total/"
+        "subtotal rows and exclude non-current items.\n\n"
+        f"ASSET ROWS:\n{chr(10).join(asset_lines)}\n\n"
+        f"LIABILITY ROWS:\n{chr(10).join(liability_lines)}\n\n"
+        "Return presentation, current_asset_labels, current_liability_labels."
+    )
+
+
 def statement_extraction_prompt() -> str:
     """Prompt for the VLM fallback: read a rasterized financial-statement page
     image and return its rows + metadata as structured data."""
@@ -72,8 +99,10 @@ def resolver_system_prompt() -> str:
         "Recommended workflow (escalate only as needed, cheapest tier first):\n"
         "1. extract_pages_tool — always first; loads the pages.\n"
         "2. assess_text_layer_tool — classify the PDF ('ok'/'sparse'/'none').\n"
-        "3. build_page_index_tool, then lookup_page_index for each kind — the "
-        "unified agentic-TOC + outline index, the most reliable source.\n"
+        "3. locate_toc_page to find the printed 'Contents' page (native text -> "
+        "OCR -> VLM fallback), then parse_contents_page on that page to populate "
+        "the unified agentic-TOC + outline index, then lookup_page_index for each "
+        "kind — the most reliable source.\n"
         "4. For any kind still missing on a TEXT pdf (text_layer != 'none'): "
         "lookup_printed_toc_and_heuristic.\n"
         "5. For any kind still missing on a scan (or text_layer == 'none'): "

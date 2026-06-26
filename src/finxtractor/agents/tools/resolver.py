@@ -48,6 +48,9 @@ class ResolverContext:
     text_layer: str | None = None
     page_index: PageIndex | None = None
 
+    toc_page: int | None = None
+    toc_text: str | None = None
+
     # --- prerequisite helpers (also used by the lookup tools to self-heal) ---
     def ensure_pages(self) -> list[Page]:
         if self.pages is None:
@@ -96,12 +99,61 @@ def build_resolver_tools(ctx: ResolverContext) -> list:
         return {"text_layer": ctx.ensure_text_layer()}
 
     @tool
-    def build_page_index_tool() -> dict:
-        """Build the unified title->page index (agentic TOC over the printed
-        'Contents' page + embedded outline). Call once before lookup_page_index.
-        Returns the number of indexed entries."""
-        index = ctx.ensure_index()
-        return {"n_entries": len(index.entries)}
+    def locate_toc_page() -> dict:
+        """Locate the Table of Contents (Contents) page number in the document.
+        Uses fallback: native PDF text -> OCR (pages 1-10) -> VLM (pages 1-10).
+        Returns the detected page number and the source, or a miss."""
+        from ..toc import find_contents_page_with_fallback
+        page, source, text = find_contents_page_with_fallback(
+            ctx.pdf, ctx.ensure_pages(), ctx.ensure_text_layer())
+        if page is not None:
+            ctx.toc_page = page
+            ctx.toc_text = text
+            return {"found": True, "page": page, "source": source}
+        return {"found": False, "page": None, "source": None}
+
+    @tool
+    def parse_contents_page(page: int) -> dict:
+        """Parse the Table of Contents on the specified page using the LLM.
+        This extracts structured page listings (titles and page numbers) and populates the page index.
+        Returns the number of indexed entries, or an error if the page could not be parsed."""
+        from ..toc import _structure_with_llm
+        from ...parsing.outline import (
+            printed_page_offset, LocatedEntry, entries_from_outline,
+        )
+        from ...services.ocr import ocr_page_text
+
+        text = None
+        if ctx.toc_page == page and ctx.toc_text:
+            text = ctx.toc_text
+        else:
+            if ctx.ensure_text_layer() != "none":
+                matched_pages = [p for p in ctx.ensure_pages() if p.number == page]
+                if matched_pages:
+                    text = matched_pages[0].text
+            if not text:
+                text = ocr_page_text(ctx.pdf, page)
+                
+        if not text or not text.strip():
+            return {"error": f"No text found on page {page}"}
+            
+        entries = _structure_with_llm(text)
+        if not entries:
+            return {"error": f"LLM failed to parse contents on page {page}"}
+            
+        offset = printed_page_offset(ctx.ensure_pages()) or 0
+        toc_entries = [
+            LocatedEntry(title=e.title, page=e.page + offset, source="agentic_toc")
+            for e in entries
+        ]
+        # Merge with the embedded outline (bookmarks) only — NOT ensure_index(),
+        # which would re-run the agentic TOC parse over a freshly re-detected
+        # (native-text-only) contents page and duplicate these entries. Agentic
+        # entries first so they win on a marker tie (mirrors build_page_index).
+        outline = (ctx.outline if ctx.outline is not None
+                   else get_pdf_reader().outline(ctx.pdf))
+        ctx.page_index = PageIndex(entries=toc_entries + entries_from_outline(outline))
+        return {"n_entries": len(ctx.page_index.entries), "offset": offset}
 
     @tool
     def lookup_page_index(kind: str) -> dict:
@@ -140,7 +192,8 @@ def build_resolver_tools(ctx: ResolverContext) -> list:
     return [
         extract_pages_tool,
         assess_text_layer_tool,
-        build_page_index_tool,
+        locate_toc_page,
+        parse_contents_page,
         lookup_page_index,
         lookup_printed_toc_and_heuristic,
         ocr_scan,
