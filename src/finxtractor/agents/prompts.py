@@ -76,13 +76,16 @@ def resolver_system_prompt() -> str:
         "unified agentic-TOC + outline index, the most reliable source.\n"
         "4. For any kind still missing on a TEXT pdf (text_layer != 'none'): "
         "lookup_printed_toc_and_heuristic.\n"
-        "5. For any kind still missing, or whenever text_layer == 'none' "
-        "(scanned): scan_pdf — this is expensive (OCR + VLM), so use it last.\n\n"
+        "5. For any kind still missing on a scan (or text_layer == 'none'): "
+        "ocr_scan (locks only on a strong text match).\n\n"
+        "You do NOT look at page images yourself. If a page is still missing "
+        "after these tools, just leave it null and finish — the system will "
+        "escalate the miss to a separate vision step automatically.\n\n"
         "Rules:\n"
-        "- Stop as soon as both kinds are found, or every applicable tier has "
+        "- Stop as soon as both kinds are found, or every applicable tool has "
         "missed. Do not call a tool twice for the same kind once it is found.\n"
         "- On a scanned PDF (text_layer == 'none') the printed-TOC/heuristic "
-        "tier is useless — skip it and go straight to scan_pdf.\n"
+        "tier is useless — skip it and go straight to ocr_scan.\n"
         "- The income statement is the priority; the balance sheet may be "
         "absent. Never invent a page number — only report pages a tool returned.\n"
         "- When done, return the structured result: the located page and the "
@@ -103,6 +106,71 @@ def resolver_user_prompt(pdf_name: str, income_override: int | None,
         lines.append(f"The balance sheet page is already known: {bs_override}. "
                      "Use it as-is (source 'override'); do not search for it.")
     lines.append("Begin with extract_pages_tool.")
+    return "\n".join(lines)
+
+
+def extractor_system_prompt() -> str:
+    """System prompt for the extractor agent: drives the per-page extraction
+    ladder and normalization, leaving unreadable pages for the vision tier."""
+    return (
+        "You extract financial-statement tables from located PDF pages into the "
+        "canonical chart of accounts. You are given one or two pages — an income "
+        "statement and (optionally) a balance sheet — plus the PDF's text_layer.\n\n"
+        "For EACH page, work an escalating ladder and stop at the first tier that "
+        "reads the table well:\n"
+        "1. extract_tableformer — skip if text_layer == 'none' (a scan has no "
+        "text layer to parse).\n"
+        "2. extract_ocr — if TableFormer returned few/no items or low confidence, "
+        "or for scanned pages.\n"
+        "Then, once a tier read usable rows, call normalize_statement(kind) to "
+        "map them onto the canonical accounts.\n\n"
+        "If BOTH text tiers fail for a page (no items / confidence ~0), do NOT "
+        "normalize it and do NOT guess — leave it unnormalized. The system will "
+        "send that page to a separate vision (VLM) step automatically.\n\n"
+        "Be efficient: don't re-run a tier that already succeeded, and don't run "
+        "OCR if TableFormer already read the table cleanly."
+    )
+
+
+def extractor_user_prompt(pages: dict[str, int], text_layer: str) -> str:
+    """Per-run request for the extractor agent."""
+    locs = ", ".join(f"{kind} on page {p}" for kind, p in pages.items())
+    return (f"Extract these statement page(s): {locs}. text_layer = {text_layer!r}.\n"
+            "Extract and normalize each page, escalating tiers only as needed.")
+
+
+def vlm_locator_system_prompt() -> str:
+    """System prompt for the VLM locator agent: a vision agent that finds ONE
+    statement page in a scan by classifying page ranges, frugally."""
+    return (
+        "You are a vision agent that locates ONE financial-statement page in a "
+        "scanned PDF: either the income statement or the balance sheet. You see "
+        "pages only through the scan_pages(kind, start, end) tool, which renders "
+        "a page range and classifies each page with a vision model — every page "
+        "is an expensive vision call, so be frugal.\n\n"
+        "Strategy:\n"
+        "- If given a hint page, scan a SMALL window around it first (primary "
+        "statements sit together, so the target is usually within a page or two "
+        "of the hint).\n"
+        "- Otherwise scan forward in small ranges (e.g. 5-10 pages) from the "
+        "front matter, widening only if needed. Use page_count to know the end.\n"
+        "- Stop as soon as scan_pages reports found=true. Never re-scan a range.\n"
+        "- If reasonable ranges are exhausted with no hit, return found=false.\n"
+        "Return the structured result: found, and the page if located."
+    )
+
+
+def vlm_locator_user_prompt(kind: str, n_pages: int, hint_page: int | None) -> str:
+    """Per-run request for the VLM locator agent."""
+    names = {
+        "income": "income statement (statement of profit or loss)",
+        "balance": "balance sheet (statement of financial position)",
+    }
+    lines = [f"Locate the {names.get(kind, kind)} in this {n_pages}-page PDF."]
+    if hint_page is not None:
+        lines.append(f"Hint: a related statement was found near page {hint_page}; "
+                     "scan a small window around there first.")
+    lines.append("Use scan_pages, and return the page once found.")
     return "\n".join(lines)
 
 

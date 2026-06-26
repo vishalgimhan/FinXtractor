@@ -22,6 +22,10 @@ class PipelineState(TypedDict, total=False):
     confidences: list[ValueConfidence]
     report: Optional[ValidationReport]
     credit_report: Optional[CreditReport]   # produced by the scoring node (clean route)
+    # --- VLM node hand-off (resolver/extractor escalate vision work here) ---
+    vlm_task: str                   # "locate" | "extract" — which job the vlm node does
+    vlm_missing: list[str]          # kinds the resolver couldn't locate (task=locate)
+    vlm_extract_pages: dict[str, int]   # {kind: page} text/OCR couldn't read (task=extract)
     # --- control-flow bookkeeping (the old while-loop variables) ---
     retries: int
     max_retries: int

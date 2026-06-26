@@ -2,8 +2,10 @@
 
 Each tool wraps one deterministic function the old resolver node called in a
 fixed `if` ladder (`extract_pages`, `assess_text_layer`, `build_page_index`,
-the index/printed-TOC/heuristic lookups, the OCR/VLM scan). The agent now
-decides which to call and when to stop.
+the index/printed-TOC/heuristic lookups, the OCR scan). The vision tier is not a
+tool here at all: when the text + OCR tiers still miss, the resolver escalates to
+the shared `vlm` graph node (task=locate). The agent decides which of these tools
+to call and when to stop.
 
 The tools share one `ResolverContext`: `extract_pages`/`assess_text_layer`/
 `build_page_index` populate it; the lookup tools read from it. Heavy data
@@ -123,15 +125,15 @@ def build_resolver_tools(ctx: ResolverContext) -> list:
         return _hit(page, source, len(pages))
 
     @tool
-    def scan_pdf(kind: str) -> dict:
-        """Deepest tier for scanned/low-text PDFs: OCR pages, then VLM-classify
-        the rest, early-stopping once found. Expensive — use only when the text
-        tiers miss or text_layer == 'none'. `kind` is 'income' or 'balance'."""
+    def ocr_scan(kind: str) -> dict:
+        """OCR-scan the pages and lock a page for `kind` only on a strong text
+        match (marker + a year + several money figures). Cheaper than the vision
+        agent — try this before consult_vlm_agent on a scan. 'income'/'balance'."""
         if kind not in _MARKERS:
             return {"error": f"kind must be one of {list(_MARKERS)}"}
         pages = ctx.ensure_pages()
         found = locate_scanned(ctx.pdf, len(pages), {kind: _MARKERS[kind]},
-                               text_layer=ctx.ensure_text_layer())
+                               text_layer=ctx.ensure_text_layer(), use_vlm=False)
         page, source = found.get(kind, (None, None))
         return _hit(page, source, len(pages))
 
@@ -141,5 +143,5 @@ def build_resolver_tools(ctx: ResolverContext) -> list:
         build_page_index_tool,
         lookup_page_index,
         lookup_printed_toc_and_heuristic,
-        scan_pdf,
+        ocr_scan,
     ]

@@ -13,6 +13,7 @@ never sweep the whole document:
 from __future__ import annotations
 
 import base64
+from functools import lru_cache
 from pathlib import Path
 
 from loguru import logger
@@ -35,10 +36,12 @@ def _strong_match(text: str, markers: list[str], min_numeric: int) -> bool:
 
 
 def locate_scanned(pdf: Path | str, n_pages: int, marker_map: dict[str, list[str]],
-                   *, text_layer: str = "ok", budget: int | None = None
-                   ) -> dict[str, tuple[int, str]]:
+                   *, text_layer: str = "ok", budget: int | None = None,
+                   use_vlm: bool = True) -> dict[str, tuple[int, str]]:
     """Return {kind: (page, source)} for the kinds in `marker_map` that could be
-    located by OCR scan then VLM classify. Early-stops once all are found."""
+    located by OCR scan then (if `use_vlm`) VLM classify. Early-stops once all
+    are found. Pass `use_vlm=False` for an OCR-only locate — the resolver agent
+    drives the VLM tier separately via its vision sub-agent."""
     budget = budget or get_param("triage", "max_scan_pages", default=60)
     min_numeric = get_param("triage", "min_statement_numeric", default=5)
     # Locating only needs legible headings to match markers, not clean figures, so
@@ -62,52 +65,62 @@ def locate_scanned(pdf: Path | str, n_pages: int, marker_map: dict[str, list[str
                 del remaining[kind]
                 logger.info("OCR scan located {} on page {}", kind, i)
 
-    # Stage 2: VLM classify whatever the OCR scan still missed.
-    if remaining:
+    # Stage 2: VLM classify whatever the OCR scan still missed (unless disabled).
+    if remaining and use_vlm:
         found.update(_locate_vlm(pdf, limit, remaining))
     return found
 
 
-def _locate_vlm(pdf: Path | str, limit: int,
-                remaining: dict[str, list[str]]) -> dict[str, tuple[int, str]]:
-    try:
-        from pydantic import BaseModel
-        from langchain_core.messages import HumanMessage
-        from ..services.vlm import get_vlm_model
-        from ..services.pdf_reader import get_pdf_reader
-        from .prompts import page_classification_prompt
-    except Exception as e:                       # langchain/pydantic missing
-        logger.warning("VLM classifier deps unavailable: {}", type(e).__name__)
-        return {}
-
-    kinds = list(remaining)
+@lru_cache(maxsize=4)
+def _vlm_classifier(kinds: tuple[str, ...]):
+    """Vision model bound to a page-class schema for `kinds`, cached per kind set
+    so the per-page classifier is built once, not per call."""
+    from pydantic import BaseModel
+    from ..services.vlm import get_vlm_model
 
     class _PageClass(BaseModel):
         kind: str | None                         # one of `kinds`, or None
 
-    try:
-        model = get_vlm_model().with_structured_output(_PageClass)
-    except Exception as e:                        # no provider / API key
-        logger.warning("VLM classifier unavailable: {}", type(e).__name__)
-        return {}
+    return get_vlm_model().with_structured_output(_PageClass)
 
-    reader = get_pdf_reader()
-    prompt = page_classification_prompt(kinds)
+
+def classify_page_vlm(pdf: Path | str, page: int, kinds: list[str]) -> str | None:
+    """Render one page and ask the vision model which of `kinds` it primarily is,
+    returning that kind (lowercased) or None. Best-effort: returns None if the
+    VLM tier / deps are unavailable or the call fails. Shared by the OCR/VLM
+    fallback sweep and the resolver's vision sub-agent."""
+    try:
+        from langchain_core.messages import HumanMessage
+        from ..services.pdf_reader import get_pdf_reader
+        from .prompts import page_classification_prompt
+        model = _vlm_classifier(tuple(kinds))
+    except Exception as e:                        # deps missing / no provider
+        logger.warning("VLM classifier unavailable: {}", type(e).__name__)
+        return None
+    b64 = base64.b64encode(get_pdf_reader().render_page(pdf, page)).decode()
+    message = HumanMessage(content=[
+        {"type": "text", "text": page_classification_prompt(list(kinds))},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+    ])
+    try:
+        result = model.invoke([message])
+    except Exception as e:
+        logger.warning("VLM classify failed on page {}: {}", page, type(e).__name__)
+        return None
+    kind = (result.kind or "").lower()
+    return kind if kind in kinds else None
+
+
+def _locate_vlm(pdf: Path | str, limit: int,
+                remaining: dict[str, list[str]]) -> dict[str, tuple[int, str]]:
+    """Deterministic VLM sweep: classify pages 1..limit, locking each kind on the
+    first page that classifies as it. Used by the non-agentic fallback path."""
+    kinds = list(remaining)
     found: dict[str, tuple[int, str]] = {}
     for i in range(1, limit + 1):
         if not remaining:
             break
-        b64 = base64.b64encode(reader.render_page(pdf, i)).decode()
-        message = HumanMessage(content=[
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-        ])
-        try:
-            result = model.invoke([message])
-        except Exception as e:
-            logger.warning("VLM classify failed on page {}: {}", i, type(e).__name__)
-            continue
-        kind = (result.kind or "").lower()
+        kind = classify_page_vlm(pdf, i, kinds)
         if kind in remaining:
             found[kind] = (i, "vlm_classify")
             del remaining[kind]

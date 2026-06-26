@@ -6,5 +6,9 @@ enters the LLM's context — only compact results (page numbers, sources, counts
 are returned to the model.
 """
 from .resolver import ResolverContext, build_resolver_tools
+from .vlm import VlmContext, build_vlm_tools
 
-__all__ = ["ResolverContext", "build_resolver_tools"]
+__all__ = [
+    "ResolverContext", "build_resolver_tools",
+    "VlmContext", "build_vlm_tools",
+]

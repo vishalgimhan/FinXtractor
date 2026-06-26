@@ -1,8 +1,10 @@
 """Agentic page resolver.
 
-An LLM agent drives the statement-page-location tiers (extract -> triage ->
-index lookup -> printed-TOC/heuristic -> OCR/VLM scan) via the tools in
-`tools/resolver.py`, deciding which to call and when to stop. It returns a
+An LLM agent drives the text-domain page-location tiers (extract -> triage ->
+index lookup -> printed-TOC/heuristic -> OCR scan) via the tools in
+`tools/resolver.py`, deciding which to call and when to stop. When those still
+miss, it does NOT look at pixels itself — `_state` routes the run to the shared
+`vlm` graph node (task=locate), which owns the vision tier. The agent returns a
 structured result the resolver node turns into pipeline state.
 
 Best-effort, like the TOC agent: if the LLM tier is unavailable (no provider/
@@ -85,23 +87,36 @@ def _finalize(ctx: ResolverContext, result: ResolverResult,
 
 
 def _state(ctx: ResolverContext, layer, index, ip, ip_source, bsp, bsp_source) -> dict:
-    """The resolver's state delta — resolved (route on) or unresolved (-> HITL)."""
-    if ip is None:
+    """The resolver's state delta. Routes one of three ways:
+    - resolved   -> extractor (income located);
+    - vlm        -> the shared vision node (task=locate) when a page is still
+                    missing and it's worth a vision look (scan, or income missing);
+    - unresolved -> HITL (income missing with nothing left to try)."""
+    base = {"income_page": ip, "bs_page": bsp,
+            "income_page_source": ip_source, "bs_page_source": bsp_source,
+            "text_layer": layer, "page_index": index}
+    missing = [k for k, p in (("income", ip), ("balance", bsp)) if p is None]
+    # Escalate to the VLM node when text + OCR tiers couldn't find income, or the
+    # PDF is scanned (matches the old "(layer == 'none' or income missing)" gate).
+    if missing and (layer == "none" or ip is None):
+        logger.info("Resolver escalating to VLM node for {}: missing {}",
+                    ctx.pdf.name, missing)
+        return {**base, "route": "vlm", "vlm_task": "locate", "vlm_missing": missing}
+    if ip is None:                            # safety: unreachable (income missing escalates)
         msg = f"Could not locate an income-statement page in {ctx.pdf.name} (text_layer={layer})"
         logger.warning(msg)
-        return {"income_page": None, "text_layer": layer, "page_index": index,
-                "resolution_error": msg, "route": "unresolved"}
+        return {**base, "resolution_error": msg, "route": "unresolved"}
     logger.info("Resolved pages for {}: income={} ({}), balance={} ({})",
                 ctx.pdf.name, ip, ip_source, bsp, bsp_source)
-    return {"income_page": ip, "bs_page": bsp,
-            "income_page_source": ip_source, "bs_page_source": bsp_source,
-            "text_layer": layer, "page_index": index, "route": "resolved"}
+    return {**base, "route": "resolved"}
 
 
 def _deterministic_resolve(ctx: ResolverContext, income_override: int | None,
                            bs_override: int | None) -> dict:
-    """The original tiered cascade, kept as the fallback when the LLM tier is
-    down: override -> unified index -> printed-TOC/heuristic -> OCR/VLM scan."""
+    """The tiered cascade, kept as the fallback when the LLM tier is down:
+    override -> unified index -> printed-TOC/heuristic -> OCR scan. The vision
+    tier is no longer run here — `_state` escalates any miss to the shared `vlm`
+    graph node, exactly as the agent path does."""
     pdf = ctx.pdf
     pages = ctx.ensure_pages()
     layer = ctx.ensure_text_layer()
@@ -121,14 +136,14 @@ def _deterministic_resolve(ctx: ResolverContext, income_override: int | None,
     ip, ip_source = locate(income_override, INCOME_MARKERS)
     bsp, bsp_source = locate(bs_override, BALANCE_SHEET_MARKERS)
 
-    # Escalate to the scan locator when text tiers couldn't find income, or scanned.
+    # OCR-scan (no VLM) when text tiers couldn't find income, or the PDF is scanned.
     missing = {}
     if ip is None:
         missing["income"] = INCOME_MARKERS
     if bsp is None:
         missing["balance"] = BALANCE_SHEET_MARKERS
     if missing and (layer == "none" or ip is None):
-        scanned = locate_scanned(pdf, len(pages), missing, text_layer=layer)
+        scanned = locate_scanned(pdf, len(pages), missing, text_layer=layer, use_vlm=False)
         if "income" in scanned:
             ip, ip_source = scanned["income"]
         if "balance" in scanned:

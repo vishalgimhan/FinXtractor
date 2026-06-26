@@ -3,10 +3,29 @@ from .state import PipelineState
 from ..validate.results import CheckStatus
 
 
-def route_after_resolver(state: PipelineState) -> Literal["extract", "unresolved"]:
-    """After the Resolver: proceed to extraction if a page was located, else
-    hand off to HITL (graceful — no crash)."""
+def route_after_resolver(state: PipelineState) -> Literal["extract", "vlm", "unresolved"]:
+    """After the Resolver: a still-missing page on a scan goes to the shared VLM
+    node; a located income page proceeds to extraction; otherwise HITL."""
+    if state.get("route") == "vlm":
+        return "vlm"
     return "extract" if state.get("income_page") is not None else "unresolved"
+
+
+def route_after_vlm(state: PipelineState) -> Literal["extractor", "validator", "hitl"]:
+    """After the shared VLM node, by the route it set: a located page -> extractor
+    (task=locate), a read table -> validator (task=extract), a miss -> HITL."""
+    route = state.get("route")
+    if route == "unresolved":
+        return "hitl"
+    if route == "validate":
+        return "validator"
+    return "extractor"                       # 'resolved' — VLM located the page
+
+
+def route_after_extractor(state: PipelineState) -> Literal["vlm", "validate"]:
+    """After the Extractor: a page its text tiers couldn't read goes to the VLM
+    node (task=extract); otherwise straight to validation."""
+    return "vlm" if state.get("route") == "vlm" else "validate"
 
 
 def route_after_validation(state: PipelineState) -> Literal["retry", "hitl", "proceed"]:

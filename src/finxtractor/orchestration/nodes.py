@@ -1,7 +1,6 @@
 from .state import PipelineState
 from ..agents.resolver import resolve
-from ..parsing.statements import extract_canonical
-from ..normalize.normalize import merge
+from ..agents.extractor import extract
 from ..validate.checks import run_all_checks
 from ..validate.confidence import score_statement
 from ..validate.hitl import build_report
@@ -20,15 +19,14 @@ def resolver_agent(state: PipelineState) -> dict:
     state for reuse. (Resolver.)"""
     return resolve(state["pdf"], state.get("income_page"), state.get("bs_page"))
 
-def extractor_node(state: PipelineState) -> dict:
-    """Extract income (+ balance sheet, if located) to canonical and merge.
-    Pages and text_layer come from the resolver; text_layer drives the
-    TableFormer -> OCR -> VLM ladder. (Extractor + Normalizer.)"""
-    pdf, ip, bsp = state["pdf"], state["income_page"], state.get("bs_page")
-    layer = state.get("text_layer", "ok")
-    income = extract_canonical(pdf, ip, text_layer=layer)
-    full = merge(income, extract_canonical(pdf, bsp, text_layer=layer)) if bsp is not None else income
-    return {"statement": full}
+def extractor_agent(state: PipelineState) -> dict:
+    """Extract the located pages to canonical via the extractor agent — an LLM
+    that drives the per-page TableFormer -> OCR ladder and normalization through
+    tools, leaving any page its text tiers can't read for the shared VLM node
+    (route='vlm', task=extract). Falls back to the deterministic ladder if the
+    LLM tier is down. (Extractor + Normalizer.)"""
+    return extract(state["pdf"], state["income_page"], state.get("bs_page"),
+                   text_layer=state.get("text_layer", "ok"))
 
 def validator_node(state: PipelineState) -> dict:
     """Run cross-foot checks, score confidence, apply the HITL gate. (Validator.)"""
