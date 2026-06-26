@@ -12,9 +12,14 @@ from .base import ParsedTable, TableExtractor
 __all__ = ["ParsedTable", "TableExtractor", "get_table_extractor"]
 
 
-@lru_cache(maxsize=1)
-def get_table_extractor() -> TableExtractor:
+@lru_cache(maxsize=4)
+def get_table_extractor(do_ocr: bool | None = None) -> TableExtractor:
+    """Active table backend. Pass do_ocr to override the configured OCR setting
+    (the OCR tier of the extraction ladder uses do_ocr=True); None keeps the
+    config value. Cached per do_ocr value so each variant is built once."""
     active, cfg = load_active_table_extractor()
+    if do_ocr is not None:
+        cfg = {**cfg, "do_ocr": do_ocr}
     if active == "docling":
         from .docling import DoclingTableExtractor
         return DoclingTableExtractor(**cfg)

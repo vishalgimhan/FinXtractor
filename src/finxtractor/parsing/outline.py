@@ -26,13 +26,15 @@ def _matches(text: str, markers: list[str]) -> bool:
 
 # --- embedded outline -------------------------------------------------------
 
-def page_from_outline(pdf: Path, markers: list[str]) -> int | None:
+def page_from_outline(pdf: Path, markers: list[str],
+                      outline: list[tuple[int, str, int]] | None = None) -> int | None:
     """Use the PDF's embedded outline/bookmarks (most reliable when present).
 
     Returns the 1-based physical page of the first entry whose title matches
-    `markers`, or None if the PDF has no outline or no matching entry.
+    `markers`, or None if the PDF has no outline or no matching entry. Pass
+    `outline` (already read by the caller) to avoid re-opening the PDF.
     """
-    toc = get_pdf_reader().outline(pdf)  # list of (level, title, page); page 1-based physical
+    toc = outline if outline is not None else get_pdf_reader().outline(pdf)
     logger.debug("Checking outline for a matching page in {}", pdf.name)
     for _level, title, page in toc:
         if page >= 1 and _matches(title, markers):
@@ -182,10 +184,12 @@ def note_pages_from_toc(pages: list[Page], numbers: list[int]) -> dict[int, int]
 
 # --- unified entry point ----------------------------------------------------
 
-def find_from_toc(pdf: Path, pages: list[Page], markers: list[str]) -> tuple[int | None, str | None]:
+def find_from_toc(pdf: Path, pages: list[Page], markers: list[str],
+                  outline: list[tuple[int, str, int]] | None = None) -> tuple[int | None, str | None]:
     """Locate a statement page via TOC for the given `markers`, best source first:
-    embedded outline -> printed contents page. Returns (page, source) or (None, None)."""
-    page = page_from_outline(pdf, markers)
+    embedded outline -> printed contents page. Returns (page, source) or (None, None).
+    Pass `outline` (already read) to avoid re-opening the PDF for the bookmarks."""
+    page = page_from_outline(pdf, markers, outline=outline)
     if page is not None:
         return page, "outline"
     page = page_from_printed_toc(pages, markers)

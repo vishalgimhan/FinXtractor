@@ -39,12 +39,14 @@ def rank_pages(pages: list[Page], markers: list[str]) -> list[int]:
     return ranked
 
 
-def resolve_page(pdf: Path, pages: list[Page], markers: list[str]) -> tuple[int | None, str | None]:
+def resolve_page(pdf: Path, pages: list[Page], markers: list[str],
+                 outline: list[tuple[int, str, int]] | None = None) -> tuple[int | None, str | None]:
     """Locate a statement page matching `markers`, best source first:
     embedded outline -> printed contents page -> keyword heuristic.
-    Returns (1-based page, source) or (None, None)."""
+    Returns (1-based page, source) or (None, None). Pass `outline` (already read)
+    to avoid re-opening the PDF for the bookmarks on every call."""
     logger.info("Resolving page for {}", pdf.name)
-    page, source = find_from_toc(pdf, pages, markers)
+    page, source = find_from_toc(pdf, pages, markers, outline=outline)
     if page is not None:
         return page, source
     ranked = rank_pages(pages, markers)

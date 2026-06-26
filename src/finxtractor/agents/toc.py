@@ -6,17 +6,14 @@ an API error) it returns None and the caller falls back to the deterministic
 TOC logic in parsing/outline.py.
 
 The result resolves any statement page (income, balance, notes, ...) from one
-parse, and is cached so it is computed only once per file.
+parse; the resolver builds it once and carries it in pipeline state.
 """
 from __future__ import annotations
-
-from functools import lru_cache
-from pathlib import Path
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from ..parsing.text import extract_pages
+from ..parsing.text import Page
 from ..parsing.outline import find_contents_page, printed_page_offset
 from .prompts import toc_extraction_prompt
 
@@ -59,9 +56,10 @@ def _structure_with_llm(toc_text: str) -> list[TocEntry] | None:
         return None
 
 
-@lru_cache(maxsize=8)
-def _build(path: str, _mtime: float) -> StructuredToc | None:
-    pages = extract_pages(path)
+def get_structured_toc(pages: list[Page]) -> StructuredToc | None:
+    """Agentic structured TOC from already-extracted `pages`, or None if there's
+    no contents page / the LLM tier is unavailable. The caller (resolver) holds
+    the result in state, so this does no caching or PDF reading itself."""
     contents = find_contents_page(pages)
     if contents is None:
         logger.debug("No printed contents page; TOC agent skipped")
@@ -72,14 +70,3 @@ def _build(path: str, _mtime: float) -> StructuredToc | None:
     offset = printed_page_offset(pages) or 0
     logger.info("Structured TOC via agent: {} entries, offset {}", len(entries), offset)
     return StructuredToc(entries=entries, page_offset=offset)
-
-
-def get_structured_toc(pdf: Path | str) -> StructuredToc | None:
-    """Agentic structured TOC for `pdf`, or None if unavailable. Cached per
-    file (keyed by path + mtime) so it is built at most once."""
-    p = Path(pdf)
-    try:
-        mtime = p.stat().st_mtime
-    except OSError:
-        mtime = 0.0
-    return _build(str(p), mtime)

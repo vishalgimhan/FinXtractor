@@ -3,6 +3,12 @@ from .state import PipelineState
 from ..validate.results import CheckStatus
 
 
+def route_after_resolver(state: PipelineState) -> Literal["extract", "unresolved"]:
+    """After the Resolver: proceed to extraction if a page was located, else
+    hand off to HITL (graceful — no crash)."""
+    return "extract" if state.get("income_page") is not None else "unresolved"
+
+
 def route_after_validation(state: PipelineState) -> Literal["retry", "hitl", "proceed"]:
     """Decide where to go after the Validator. Reads state only — no side effects."""
     checks = state.get("checks", [])

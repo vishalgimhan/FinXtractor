@@ -59,3 +59,16 @@ def toc_extraction_prompt(toc_text: str) -> str:
         "Contents page text:\n"
         f"{toc_text}"
     )
+
+
+def page_classification_prompt(kinds: list[str]) -> str:
+    """Prompt for the VLM page classifier: which statement (if any) a page image is."""
+    return (
+        "You are shown ONE page of a financial report as an image. Decide which "
+        f"of these financial statements it primarily is: {kinds}.\n"
+        "- If the page IS one of them (the actual statement table), return that "
+        "exact kind string.\n"
+        "- If it is none of them (narrative text, notes, a contents/index page, "
+        "an auditor's report, etc.), return null.\n"
+        "Return only the kind or null."
+    )

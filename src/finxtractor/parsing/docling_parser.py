@@ -208,14 +208,16 @@ def _has_year_columns(roles: ColumnRoles) -> bool:
     return bool(value_cols)
 
 
-def parse_statement(pdf: Path | str, page_number: int) -> Statement:
+def parse_statement(pdf: Path | str, page_number: int, *, ocr: bool = False) -> Statement:
     """Parse a page into a Statement, aggregating every table whose header carries
     a year column (so multi-table statements are captured without ingesting
     unrelated tables). Falls back to the densest table when no table has a year
-    header (positional parsing). Context comes from the densest selected table."""
+    header (positional parsing). Context comes from the densest selected table.
+
+    ocr=True runs TableFormer with OCR on (for scanned pages with no text layer)."""
     pdf_path = Path(pdf)
-    logger.info("Parsing {} page {}", pdf_path.name, page_number)
-    tables = get_table_extractor().extract_tables(pdf, page_number)
+    logger.info("Parsing {} page {} (ocr={})", pdf_path.name, page_number, ocr)
+    tables = get_table_extractor(do_ocr=True if ocr else None).extract_tables(pdf, page_number)
     stmt = Statement(source_pdf=pdf_path.name, statement_pages=[page_number])
     if not tables:
         logger.warning("No tables found on page {}; returning empty statement", page_number)

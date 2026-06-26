@@ -1,6 +1,14 @@
 # Project-wide tunable parameters. Read via finxtractor.config.get_param(...).
 # (Table-extraction backend settings live in config/models.yaml -> table_extraction.)
 
+triage:
+  per_page_min_chars: 50          # a page with >= this many chars counts as "has text"
+  min_text_page_fraction: 0.5     # >= this fraction of pages with text -> text layer ok
+  min_chars_per_page: 100         # and average chars/page must clear this too
+  max_scan_pages: 60              # safety cap when scanning pages to locate statements
+  min_statement_numeric: 5        # min money-figure tokens for a page to count as a real statement
+  scan_dpi: 100                   # low DPI for the locate-scan OCR (headings only, ~3x faster than 150)
+
 normalize:
   fuzzy_threshold: 92           # rapidfuzz token_sort_ratio cutoff (0-100)
   use_llm: false                # default state of the LLM mapping tier

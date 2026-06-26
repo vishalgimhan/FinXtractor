@@ -168,6 +168,11 @@ def pipeline(
     typer.echo(f"retries     : {final.get('retries', 0)}")
     typer.echo(f"flagged     : {final['report'].flagged_count}")
     typer.echo(final["report"].model_dump_json(indent=2))
+
+    credit = final.get("credit_report")
+    if credit is not None:
+        typer.echo("\n--- credit report ---")
+        typer.echo(credit.model_dump_json(indent=2))
     if final.get("route") == "hitl":
         raise typer.Exit(code=1)
 

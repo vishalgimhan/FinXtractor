@@ -3,7 +3,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from .state import PipelineState
 from .nodes import resolver_node, extractor_node, validator_node, retry_node, hitl_node, scoring_node
-from .router import route_after_validation
+from .router import route_after_resolver, route_after_validation
 
 
 def build_pipeline() -> StateGraph:
@@ -17,7 +17,11 @@ def build_pipeline() -> StateGraph:
     g.add_node("scoring", scoring_node)
 
     g.add_edge(START, "resolver")           # entry: locate the statement pages
-    g.add_edge("resolver", "extractor")     # then extract them
+    g.add_conditional_edges(                # located -> extract; not found -> graceful HITL
+        "resolver",
+        route_after_resolver,
+        {"extract": "extractor", "unresolved": "hitl"},
+    )
     g.add_edge("extractor", "validator")    # always validate after extracting
 
     g.add_conditional_edges(

@@ -3,6 +3,7 @@ from typing import Optional, TypedDict
 from ..schemas.canonical import CanonicalStatement
 from ..validate.results import CheckResult, ValueConfidence, ValidationReport
 from ..agents.toc import StructuredToc
+from ..scoring.schemas import CreditReport
 
 
 class PipelineState(TypedDict, total=False):
@@ -13,11 +14,14 @@ class PipelineState(TypedDict, total=False):
     # --- produced as the run progresses ---
     income_page_source: str         # "override" | "agentic_toc" | "outline" | "printed_toc" | ...
     bs_page_source: str
+    text_layer: str                 # "ok" | "sparse" | "none" (scanned) -> drives OCR/VLM routing
+    resolution_error: Optional[str] # set when no statement page could be located
     toc: Optional[StructuredToc]     # agentic structured contents page, reusable for note pages
     statement: Optional[CanonicalStatement]
     checks: list[CheckResult]
     confidences: list[ValueConfidence]
     report: Optional[ValidationReport]
+    credit_report: Optional[CreditReport]   # produced by the scoring node (clean route)
     # --- control-flow bookkeeping (the old while-loop variables) ---
     retries: int
     max_retries: int

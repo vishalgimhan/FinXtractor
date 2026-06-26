@@ -15,19 +15,26 @@ from ..llm.openrouter import build as _build_openrouter
 from .base import VlmExtractor
 from .extractor import VlmStatementExtractor
 
-__all__ = ["VlmExtractor", "get_vlm_extractor", "extract_with_vlm"]
+__all__ = ["VlmExtractor", "get_vlm_extractor", "get_vlm_model", "extract_with_vlm"]
 
 # VLM uses the same chat clients as the text LLM — only the model names differ.
 _BUILDERS = {"ollama": _build_ollama, "openrouter": _build_openrouter}
 
 
 @lru_cache(maxsize=1)
-def get_vlm_extractor() -> VlmExtractor:
+def get_vlm_model():
+    """The raw vision-capable chat model for the active VLM provider. Shared by
+    the statement extractor and the page classifier (each binds its own schema)."""
     active, cfg = load_active_vlm()
     build = _BUILDERS.get(active)
     if build is None:
         raise ValueError(f"Unknown VLM provider: {active}")
-    return VlmStatementExtractor(build(cfg))
+    return build(cfg)
+
+
+@lru_cache(maxsize=1)
+def get_vlm_extractor() -> VlmExtractor:
+    return VlmStatementExtractor(get_vlm_model())
 
 
 def extract_with_vlm(pdf: Path | str, page_number: int) -> Statement:
