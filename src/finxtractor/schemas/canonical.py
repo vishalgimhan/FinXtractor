@@ -5,7 +5,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from .note import NoteRef
-from .statement import Units
+from .statement import Units, Provenance
 
 
 class CanonicalAccount(str, Enum):
@@ -34,7 +34,7 @@ class CanonicalLine(BaseModel):
     source_labels: list[str] = Field(default_factory=list)  # raw labels that mapped here
     note_refs: list[NoteRef] = Field(default_factory=list)  # notes cited by the source row(s)
     mapped_by: str = "alias"                       # "alias" | "fuzzy" | "llm"
-
+    provenance: Optional[Provenance] = None          # from the source row that mapped here
 
 class CanonicalStatement(BaseModel):
     source_pdf: str

@@ -3,7 +3,8 @@ from .text import extract_pages
 from .routing import note_pages_from_toc
 
 from ..schemas import Statement
-from .docling_parser import _build_converter, _numeric_density
+from .docling_parser import _money_cells
+from ..services.table_extractor import get_table_extractor
 
 def locate_notes(pdf: Path | str, numbers: list[int]) -> dict[int, int]:
     """Map each note number -> its 1-based physical page via the printed
@@ -13,12 +14,10 @@ def locate_notes(pdf: Path | str, numbers: list[int]) -> dict[int, int]:
 
 def extract_note_table(pdf: Path | str, page_number: int) -> list[list[str]]:
     """Densest table on the note's page, as raw rows. Empty list if none."""
-    result = _build_converter().convert(str(pdf), page_range=(page_number, page_number))
-    tables = result.document.tables
+    tables = get_table_extractor().extract_tables(pdf, page_number)
     if not tables:
         return []
-    table = max(tables, key=_numeric_density)
-    df = table.export_to_dataframe()
+    df = max(tables, key=lambda pt: _money_cells(pt.df)).df
     return [[("" if str(c).strip().lower() == "nan" else str(c).strip())
              for c in row] for row in df.to_numpy().tolist()]
 

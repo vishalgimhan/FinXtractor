@@ -11,7 +11,7 @@ from ..config import get_param
 from ..schemas import Statement
 from ..schemas.canonical import CanonicalStatement
 from .docling_parser import parse_statement, table_confidence
-from .vlm_fallback import extract_with_vlm
+from ..services.vlm import extract_with_vlm
 from .notes import resolve_line_item_notes
 from ..normalize.normalize import normalize
 

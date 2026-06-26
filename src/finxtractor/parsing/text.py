@@ -2,7 +2,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
-import fitz
+
+from ..services.pdf_reader import get_pdf_reader
 
 @dataclass
 class Page:
@@ -12,7 +13,7 @@ class Page:
 def extract_pages(pdf: Path | str) -> list[Page]:
     pdf_path = Path(pdf)
     logger.info("Extracting pages from {}", pdf_path.name)
-    doc = fitz.open(pdf_path)
-    pages = [Page(i + 1, doc.load_page(i).get_text()) for i in range(doc.page_count)]
+    texts = get_pdf_reader().page_texts(pdf)
+    pages = [Page(i + 1, text) for i, text in enumerate(texts)]
     logger.debug("Extracted {} page(s) from {}", len(pages), pdf_path.name)
     return pages

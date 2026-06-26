@@ -6,6 +6,7 @@ from loguru import logger
 
 from ..schemas import Statement
 from ..parsing.note_tables import collect_note_tables
+from ..normalize.mapper import map_label
 
 
 def _li_id(i: int) -> str:      return f"li:{i}"
@@ -18,8 +19,11 @@ def _val_id(owner: str, yr) -> str:  return f"val:{owner}:{yr}"
 def _add_line_items(G: nx.DiGraph, stmt: Statement) -> None:
     for i, item in enumerate(stmt.line_items):
         lid = _li_id(i)
+        account = map_label(item.label_raw).account   # canonical account, for score tracing
         G.add_node(lid, kind="line_item", label=item.label_raw,
-                   is_subtotal=item.is_subtotal, page=item.page)
+                   is_subtotal=item.is_subtotal, page=item.page,
+                   bbox=item.provenance.bbox if item.provenance else None,
+                   account=account.value if account else None)
         for slot in ("current", "prior"):
             amount = getattr(item, f"value_{slot}")
             if amount is None:

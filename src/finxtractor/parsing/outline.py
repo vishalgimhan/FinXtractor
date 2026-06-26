@@ -7,10 +7,10 @@ detected offset). Also resolves note numbers to their physical pages.
 from collections import Counter
 from pathlib import Path
 
-import fitz
 from loguru import logger
 
 from ..config import get_markers, get_pattern
+from ..services.pdf_reader import get_pdf_reader
 from .text import Page
 
 
@@ -32,11 +32,7 @@ def page_from_outline(pdf: Path, markers: list[str]) -> int | None:
     Returns the 1-based physical page of the first entry whose title matches
     `markers`, or None if the PDF has no outline or no matching entry.
     """
-    doc = fitz.open(pdf)
-    try:
-        toc = doc.get_toc()  # list of [level, title, page]; page is 1-based physical
-    finally:
-        doc.close()
+    toc = get_pdf_reader().outline(pdf)  # list of (level, title, page); page 1-based physical
     logger.debug("Checking outline for a matching page in {}", pdf.name)
     for _level, title, page in toc:
         if page >= 1 and _matches(title, markers):
@@ -93,6 +89,17 @@ def _page_offset(pages: list[Page], contents: Page | None) -> int | None:
     if not offsets:
         return None
     return offsets.most_common(1)[0][0]
+
+
+def find_contents_page(pages: list[Page]) -> Page | None:
+    """Public: the printed 'Contents' page, if the report has one."""
+    return _find_contents_page(pages)
+
+
+def printed_page_offset(pages: list[Page]) -> int | None:
+    """Public: offset between physical index and printed page number
+    (physical = printed + offset), inferred from page footers."""
+    return _page_offset(pages, _find_contents_page(pages))
 
 
 def page_from_printed_toc(pages: list[Page], markers: list[str]) -> int | None:

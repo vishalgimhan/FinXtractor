@@ -121,3 +121,30 @@ def load_active_provider() -> tuple[str, ProviderConfig]:
     llm = load_models().get("llm", {})
     active = get_env("FINX_LLM_PROVIDER", llm["active"])   # .env overrides file
     return active, ProviderConfig(**llm["providers"][active])
+
+
+def load_active_vlm() -> tuple[str, ProviderConfig]:
+    """Active vision-LLM provider for the VLM fallback (config/models.yaml -> vlm)."""
+    vlm = load_models().get("vlm", {})
+    active = get_env("FINX_VLM_PROVIDER", vlm["active"])   # .env overrides file
+    return active, ProviderConfig(**vlm["providers"][active])
+
+
+# --- table-extraction backend (config/models.yaml -> `table_extraction`) -----
+def load_active_table_extractor() -> tuple[str, dict]:
+    """Return (active backend name, its provider settings dict). Falls back to a
+    docling default so the package runs without the models.yaml section."""
+    te = load_models().get("table_extraction", {})
+    active = get_env("FINX_TABLE_BACKEND", te.get("active", "docling"))
+    cfg = te.get("providers", {}).get(active, {})
+    return active, cfg
+
+
+# --- PDF reader backend (config/models.yaml -> `pdf_reader`) -----------------
+def load_active_pdf_reader() -> tuple[str, dict]:
+    """Return (active backend name, its provider settings dict). Falls back to a
+    pymupdf default so the package runs without the models.yaml section."""
+    pr = load_models().get("pdf_reader", {})
+    active = get_env("FINX_PDF_READER", pr.get("active", "pymupdf"))
+    cfg = pr.get("providers", {}).get(active, {})
+    return active, cfg

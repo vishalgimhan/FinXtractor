@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from ..schemas.canonical import CanonicalAccount
-from ..llm.client import get_chat_model
-from ..llm.prompts import label_mapping_prompt
+from ..services.llm import get_chat_model
+from ..agents.prompts import label_mapping_prompt
 
 _ACCOUNTS = [a.value for a in CanonicalAccount]
 

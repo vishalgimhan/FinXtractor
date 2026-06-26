@@ -102,8 +102,13 @@ def normalize(stmt: Statement, use_llm: bool = False) -> CanonicalStatement:
                 from_subtotal[key] = True
             continue
         cs.lines[key] = CanonicalLine(
-            account=account, value_current=cur, value_prior=pri,
-            source_labels=[item.label_raw], note_refs=list(item.note_refs), mapped_by=method,
+            account=account, 
+            value_current=cur, 
+            value_prior=pri,
+            source_labels=[item.label_raw], 
+            note_refs=list(item.note_refs), 
+            mapped_by=method,
+            provenance=item.provenance,
         )
         from_subtotal[key] = item.is_subtotal
     logger.info("Normalization produced {} canonical line(s) for {}", len(cs.lines), stmt.source_pdf)

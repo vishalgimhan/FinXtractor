@@ -12,4 +12,33 @@ llm:
       base_url: "https://openrouter.ai/api/v1"
       temperature: 0
 
-vlm: granite-docling        # Docling vision fallback for low-confidence tables
+# Table-extraction / OCR backend. Swappable like the llm section above:
+# add a new file under parsing/extractors/ and a providers entry here.
+table_extraction:
+  active: docling
+  providers:
+    docling:
+      mode: ACCURATE          # ACCURATE | FAST  (Docling TableFormer)
+      do_ocr: false           # text-based reports; OCR off for speed
+
+# PDF reader (page text, outline, rasterization). Swappable like the sections
+# above: add a file under parsing/readers/ and a providers entry here.
+pdf_reader:
+  active: pymupdf
+  providers:
+    pymupdf:
+      render_dpi: 150         # default DPI for page rasterization (render_page)
+
+# Vision-LLM fallback for low-confidence tables. Swappable like the llm section:
+# the same Ollama / OpenRouter clients, just vision-capable model names.
+vlm:
+  active: openrouter
+  providers:
+    ollama:
+      model: "qwen3-vl:8b"
+      base_url: "http://localhost:11434"
+      temperature: 0
+    openrouter:
+      model: "qwen/qwen3-vl-8b-instruct"   # same open weights, hosted
+      base_url: "https://openrouter.ai/api/v1"
+      temperature: 0

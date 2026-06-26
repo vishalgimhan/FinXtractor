@@ -4,7 +4,6 @@ import json
 import uuid
 
 import typer
-import fitz
 from loguru import logger
 
 # CLI emits UTF-8 (JSON may carry −, ⚠, accented names) even on cp1252 consoles.
@@ -13,6 +12,7 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8")
 
 from finxtractor.config import get_param
+from finxtractor.services.pdf_reader import get_pdf_reader
 from finxtractor.parsing.text import extract_pages
 from finxtractor.parsing.routing import resolve_page, INCOME_MARKERS, BALANCE_SHEET_MARKERS
 from finxtractor.parsing.statements import extract_statement, extract_canonical
@@ -44,10 +44,9 @@ def run(pdf: Path):
     if not pdf.exists():
         raise typer.BadParameter(f"No file at {pdf}")
     logger.info("Opening {} for page-count check", pdf.name)
-    doc = fitz.open(pdf)
-    typer.echo(f"{pdf.name}: {doc.page_count} pages")
+    count = get_pdf_reader().page_count(pdf)
+    typer.echo(f"{pdf.name}: {count} pages")
     logger.debug("Page-count check complete for {}", pdf.name)
-    doc.close()
 
 @app.command()
 def extract(
@@ -153,17 +152,18 @@ def pipeline(
     max_retries: int = typer.Option(get_param("validation", "max_retries", default=2), "--max-retries"),
 ):
     """Run the full LangGraph pipeline for one report."""
-    ip = income_page or _resolved_page(pdf, INCOME_MARKERS)
-    bsp = bs_page or _resolved_page(pdf, BALANCE_SHEET_MARKERS)
-    logger.info("Running pipeline for {} (income_page={}, bs_page={}, max_retries={})", pdf.name, ip, bsp, max_retries)
+    # Pages are resolved inside the graph (resolver node); pass overrides if given.
+    logger.info("Running pipeline for {} (income_page={}, bs_page={}, max_retries={})", pdf.name, income_page, bs_page, max_retries)
     graph = compiled_pipeline()
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
-    initial = {"pdf": str(pdf), "income_page": ip, "bs_page": bsp,
+    initial = {"pdf": str(pdf), "income_page": income_page, "bs_page": bs_page,
                "retries": 0, "max_retries": max_retries}
 
     final = graph.invoke(initial, config)
 
     logger.info("Pipeline finished for {} with route={}, retries={}, flagged={}", pdf.name, final.get('route'), final.get('retries', 0), final['report'].flagged_count)
+    typer.echo(f"income page : {final.get('income_page')} (via {final.get('income_page_source')})")
+    typer.echo(f"bs page     : {final.get('bs_page')} (via {final.get('bs_page_source')})")
     typer.echo(f"route taken : {final.get('route')}")
     typer.echo(f"retries     : {final.get('retries', 0)}")
     typer.echo(f"flagged     : {final['report'].flagged_count}")

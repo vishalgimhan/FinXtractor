@@ -1,8 +1,5 @@
 # Project-wide tunable parameters. Read via finxtractor.config.get_param(...).
-
-parsing:
-  table_former_mode: ACCURATE   # ACCURATE | FAST  (Docling TableFormer)
-  do_ocr: false                 # text-based reports; OCR off for speed
+# (Table-extraction backend settings live in config/models.yaml -> table_extraction.)
 
 normalize:
   fuzzy_threshold: 92           # rapidfuzz token_sort_ratio cutoff (0-100)

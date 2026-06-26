@@ -2,12 +2,9 @@ import re
 from pathlib import Path
 
 from loguru import logger
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.base_models import InputFormat
-from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 
 from ..schemas import LineItem, Statement, Provenance
-from ..config import get_param
+from ..services.table_extractor import ParsedTable, get_table_extractor
 from .units import detect_units, detect_currency, detect_sign_convention
 from .text import extract_pages
 
@@ -52,20 +49,8 @@ def table_confidence(stmt: Statement) -> float:
     return min(len(items) / 8, 1.0) * 0.4 \
         + (have_two / len(items)) * 0.3 \
         + (have_label / len(items)) * 0.3
-        
-# Docling Table Structure Recognizer
-def _build_converter() -> DocumentConverter:
-    mode = get_param("parsing", "table_former_mode", default="ACCURATE")
-    do_ocr = get_param("parsing", "do_ocr", default=False)
-    logger.debug("Building docling PDF converter (mode={}, do_ocr={})", mode, do_ocr)
-    opts = PdfPipelineOptions(do_table_structure=True)
-    opts.table_structure_options.mode = TableFormerMode[mode]  # ACCURATE | FAST
-    opts.do_ocr = do_ocr
-    return DocumentConverter(
-        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}
-    )
 
-# Docling DF uses NaN for empty cells
+# DataFrame export uses NaN for empty cells
 def _clean(cells: list) -> list[str]:
     out = []
     for c in cells:
@@ -83,13 +68,6 @@ def _to_float(token: str) -> float:
 def _money_cells(df) -> int:
     flat = df.astype(str).to_numpy().ravel()
     return sum(1 for c in flat if _MONEY.match(str(c).strip()))
-
-
-def _numeric_density(table) -> int:
-    try:
-        return _money_cells(table.export_to_dataframe())
-    except Exception:
-        return 0
 
 # detect years
 def _detect_years(df) -> tuple[int | None, int | None]:
@@ -191,13 +169,11 @@ def _row_to_item_positional(cells: list[str]) -> LineItem | None:
         return None
     return _make_item(label, vals, note_raw)
 
-def _table_to_items(table, page_number: int, df, roles: ColumnRoles) -> list[LineItem]:
-    """Parse one Docling table's rows into LineItems with provenance.
-    `df` and `roles` are precomputed by the caller to avoid re-exporting."""
-    prov_bbox = None
-    if table.prov:
-        b = table.prov[0].bbox
-        prov_bbox = (b.l, b.t, b.r, b.b)             # four floats, per schema
+def _table_to_items(pt: ParsedTable, page_number: int, roles: ColumnRoles) -> list[LineItem]:
+    """Parse one extracted table's rows into LineItems with provenance.
+    `roles` is precomputed by the caller from `pt.df`."""
+    prov_bbox = pt.bbox                               # four floats or None, per schema
+    df = pt.df
     items: list[LineItem] = []
     for _, row in df.iterrows():
         cells = row.tolist()
@@ -239,23 +215,22 @@ def parse_statement(pdf: Path | str, page_number: int) -> Statement:
     header (positional parsing). Context comes from the densest selected table."""
     pdf_path = Path(pdf)
     logger.info("Parsing {} page {}", pdf_path.name, page_number)
-    result = _build_converter().convert(str(pdf), page_range=(page_number, page_number))
-    doc = result.document
+    tables = get_table_extractor().extract_tables(pdf, page_number)
     stmt = Statement(source_pdf=pdf_path.name, statement_pages=[page_number])
-    if not doc.tables:
+    if not tables:
         logger.warning("No tables found on page {}; returning empty statement", page_number)
         return stmt  # no table => VLM-fallback territory
 
-    # Export each table once; carry (table, df, roles) through.
-    parsed = [(t, df := t.export_to_dataframe(), _column_roles(df)) for t in doc.tables]
-    selected = [pr for pr in parsed if _has_year_columns(pr[2])]
+    # Classify each table's columns once; carry (ParsedTable, roles) through.
+    parsed = [(pt, _column_roles(pt.df)) for pt in tables]
+    selected = [pr for pr in parsed if _has_year_columns(pr[1])]
     if not selected:                                  # no year headers -> densest, positional
-        selected = [max(parsed, key=lambda pr: _money_cells(pr[1]))]
-    densest = max(selected, key=lambda pr: _money_cells(pr[1]))
-    _apply_context(stmt, pdf_path, page_number, densest[1])
-    for table, df, roles in selected:
-        stmt.line_items.extend(_table_to_items(table, page_number, df, roles))
+        selected = [max(parsed, key=lambda pr: _money_cells(pr[0].df))]
+    densest = max(selected, key=lambda pr: _money_cells(pr[0].df))
+    _apply_context(stmt, pdf_path, page_number, densest[0].df)
+    for pt, roles in selected:
+        stmt.line_items.extend(_table_to_items(pt, page_number, roles))
     logger.info("Parsed {} line item(s) from {}/{} table(s) on page {}",
-                len(stmt.line_items), len(selected), len(doc.tables), page_number)
+                len(stmt.line_items), len(selected), len(tables), page_number)
     return stmt
 

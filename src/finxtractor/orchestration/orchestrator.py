@@ -21,8 +21,8 @@ class DocResult:
 @dataclass
 class DocSpec:
     pdf: str
-    income_page: int
-    bs_page: int | None = None
+    income_page: int | None = None   # optional override; else the resolver locates it
+    bs_page: int | None = None       # optional override; else the resolver locates it
 
 
 def _run_one(graph, spec: DocSpec, max_retries: int) -> DocResult:
