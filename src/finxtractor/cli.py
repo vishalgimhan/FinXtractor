@@ -178,3 +178,45 @@ def run_all(max_retries: int = typer.Option(2, "--max-retries")):
                    + (f"  ⚠ {r.error}" if r.error else ""))
     if any(r.route in ("hitl", "error") for r in results):
         raise typer.Exit(code=1)
+
+
+@app.command()
+def start(
+    host: str = typer.Option("127.0.0.1", "--host", help="Host for the FastAPI backend"),
+    port: int = typer.Option(8000, "--port", help="Port for the FastAPI backend"),
+):
+    """Start both the FastAPI backend (uvicorn) and the Streamlit dashboard concurrently."""
+    import subprocess
+    import time
+
+    logger.info("Starting API on http://{}:{} and Streamlit UI...", host, port)
+
+    # Run using the virtual environment's Python executable
+    api_cmd = [sys.executable, "-m", "uvicorn", "api.main:app", "--host", host, "--port", str(port)]
+    ui_cmd = [sys.executable, "-m", "streamlit", "run", "src/finxtractor/dashboard.py"]
+
+    processes = []
+    try:
+        api_proc = subprocess.Popen(api_cmd)
+        processes.append(api_proc)
+        # Give the API a brief moment to bind to the port
+        time.sleep(1.5)
+
+        ui_proc = subprocess.Popen(ui_cmd)
+        processes.append(ui_proc)
+
+        # Keep running until Ctrl+C or one of the processes exits
+        while all(p.poll() is None for p in processes):
+            time.sleep(0.5)
+
+    except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt received, stopping both processes...")
+    finally:
+        for p in processes:
+            if p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+        logger.info("Processes stopped successfully.")

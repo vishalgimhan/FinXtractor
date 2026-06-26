@@ -589,11 +589,13 @@ except Exception as e:
 
 # Helper to construct CanonicalStatement from dictionary
 def dict_to_canonical(stmt_dict):
+    if stmt_dict is None:
+        return None
     lines = {}
     for k, v in stmt_dict["lines"].items():
         note_refs = [NoteRef(number=n["number"], sub=n.get("sub")) for n in v.get("note_refs", [])]
         prov = None
-        if "provenance" in v:
+        if "provenance" in v and v["provenance"] is not None:
             p = v["provenance"]
             prov = Provenance(
                 page=p["page"],
@@ -622,11 +624,264 @@ def dict_to_canonical(stmt_dict):
         lines=lines
     )
 
+
+# --- File-based caching and loading logic ---
+def save_cache(pdf_name: str, state: dict) -> None:
+    cache_path = Path("outputs") / f"{pdf_name}.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    stmt = state.get("statement")
+    credit = state.get("credit_report")
+    checks = state.get("checks", [])
+    confidences = state.get("confidences", [])
+    report = state.get("report")
+    
+    cache_data = {
+        "pdf": state.get("pdf"),
+        "income_page": state.get("income_page"),
+        "bs_page": state.get("bs_page"),
+        "income_page_source": state.get("income_page_source"),
+        "bs_page_source": state.get("bs_page_source"),
+        "text_layer": state.get("text_layer", "ok"),
+        "statement": json.loads(stmt.model_dump_json()) if stmt else None,
+        "checks": [json.loads(c.model_dump_json()) for c in checks],
+        "confidences": [json.loads(c.model_dump_json()) for c in confidences],
+        "report": json.loads(report.model_dump_json()) if report else None,
+        "credit_report": json.loads(credit.model_dump_json()) if credit else None
+    }
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(cache_data, f, indent=2)
+
+
+def hydrate_state(data: dict) -> dict:
+    """Reconstruct the pydantic objects in a raw state/cache dict in place.
+
+    Shared by load_cache (file) and the live API stream's `done` event so both
+    paths produce identical session state."""
+    if data.get("statement"):
+        data["statement"] = dict_to_canonical(data["statement"])
+
+    from finxtractor.validate.results import CheckResult, ValueConfidence, ValidationReport
+    from finxtractor.scoring.schemas import CreditReport
+
+    if data.get("checks"):
+        data["checks"] = [CheckResult(**c) for c in data["checks"]]
+    if data.get("confidences"):
+        data["confidences"] = [ValueConfidence(**c) for c in data["confidences"]]
+    if data.get("report"):
+        data["report"] = ValidationReport(**data["report"])
+    if data.get("credit_report"):
+        data["credit_report"] = CreditReport(**data["credit_report"])
+    return data
+
+
+def load_cache(pdf_name: str) -> dict | None:
+    cache_path = Path("outputs") / f"{pdf_name}.json"
+    if not cache_path.exists():
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return hydrate_state(data)
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to load cache for {pdf_name}: {e}")
+        return None
+
+
+# Startup pre-population of cache from high-fidelity default data
+def initialize_default_caches():
+    outputs_dir = Path("outputs")
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    for pdf_name, data in HIGH_FIDELITY_STATEMENTS.items():
+        cache_file = outputs_dir / f"{pdf_name}.json"
+        if not cache_file.exists():
+            # Setup default cache structure
+            cache_data = {
+                "pdf": f"data/reports/{pdf_name}",
+                "income_page": 8 if "CITIGROUP" in pdf_name else (4 if "AUSNET" in pdf_name else (3 if "B & E" in pdf_name else 2)),
+                "bs_page": 9 if "CITIGROUP" in pdf_name else (5 if "AUSNET" in pdf_name else (4 if "B & E" in pdf_name else 3)),
+                "income_page_source": "printed_toc",
+                "bs_page_source": "printed_toc",
+                "text_layer": "ok",
+                "statement": data,
+                "checks": [],
+                "confidences": [],
+                "report": None,
+                "credit_report": None
+            }
+            try:
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump(cache_data, f, indent=2)
+            except Exception as e:
+                import logging
+                logging.error(f"Failed to write default cache for {pdf_name}: {e}")
+
+initialize_default_caches()
+
+
+# Streamlit-cached real NetworkX Graph builder
+@st.cache_resource(show_spinner="Building Notes Knowledge Graph...")
+def get_real_graph(pdf_path_str: str, income_page: int | None, bs_page: int | None, text_layer: str):
+    from finxtractor.parsing.docling_parser import parse_statement
+    from finxtractor.parsing.notes import resolve_line_item_notes
+    from finxtractor.normalize.normalize import merge_raw
+    from finxtractor.graph.builder import build_graph
+
+    pdf_path = Path(pdf_path_str)
+    if not pdf_path.exists() or income_page is None:
+        return None
+
+    ocr = text_layer == "none"          # scanned page -> TableFormer+OCR
+    try:
+        def _raw(page: int):
+            s = parse_statement(pdf_path, page, ocr=ocr)
+            resolve_line_item_notes(s)
+            return s
+
+        raw_statement = _raw(income_page)
+        if bs_page is not None:
+            raw_statement = merge_raw(raw_statement, _raw(bs_page))
+
+        G = build_graph(raw_statement, pdf_path)
+        return G
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to build real graph: {e}")
+        return None
+
+
+# --- Live streaming pipeline (FinXtractor Pipeline API) ---------------------
+# Stages mirror the LangGraph nodes; (node, short label, description).
+PIPELINE_STAGES = [
+    ("resolver", "Resolver", "Locating statement pages"),
+    ("extractor", "Extractor", "Extracting line items"),
+    ("vlm", "VLM", "Vision fallback"),
+    ("validator", "Validator", "Cross-foot validation"),
+    ("retry", "Retry", "Retry extraction"),
+    ("scoring", "Scoring", "Credit analysis"),
+    ("hitl", "HITL", "Human review"),
+]
+_STAGE_LABELS = {n: lbl for n, lbl, _ in PIPELINE_STAGES}
+
+
+def _pipeline_dot(status: dict[str, str]) -> str:
+    """Build a Graphviz DOT string of the pipeline, colored by stage status
+    (pending / active / done / fail)."""
+    colors = {"done": "#10b981", "active": "#f59e0b", "fail": "#ef4444", "pending": "#374151"}
+    lines = ['digraph G {', 'rankdir=LR;', 'bgcolor="transparent";',
+             'node [fontname="Inter", fontcolor="white", style="filled,rounded", shape=box];',
+             'edge [color="#9ca3af"];']
+    for node, label, _ in PIPELINE_STAGES:
+        c = colors.get(status.get(node, "pending"), "#374151")
+        lines.append(f'"{node}" [label="{label}", fillcolor="{c}", color="{c}"];')
+    lines += [
+        '"resolver" -> "extractor";',
+        '"extractor" -> "validator";',
+        '"validator" -> "scoring";',
+        '"resolver" -> "vlm" [style=dashed];',
+        '"extractor" -> "vlm" [style=dashed];',
+        '"vlm" -> "extractor" [style=dashed];',
+        '"validator" -> "retry" [style=dashed];',
+        '"retry" -> "extractor" [style=dashed];',
+        '"validator" -> "hitl" [style=dashed];',
+        '}',
+    ]
+    return "\n".join(lines)
+
+
+def _stage_checklist_md(status: dict[str, str], deltas: dict[str, dict]) -> str:
+    """Markdown checklist of stages with per-stage delta hints."""
+    icons = {"done": "✅", "active": "⏳", "fail": "🔴", "pending": "⬜"}
+    rows = []
+    for node, label, desc in PIPELINE_STAGES:
+        s = status.get(node, "pending")
+        d = deltas.get(node, {})
+        hint = ""
+        if d:
+            bits = []
+            if "income_page" in d: bits.append(f"income p.{d['income_page']}")
+            if "bs_page" in d: bits.append(f"bs p.{d['bs_page']}")
+            if "line_items" in d: bits.append(f"{d['line_items']} lines")
+            if "checks_total" in d: bits.append(f"{d.get('checks_failed', 0)}/{d['checks_total']} failed")
+            if "grade" in d: bits.append(f"grade {d['grade']}")
+            if "retries" in d: bits.append(f"retry {d['retries']}")
+            if "resolution_error" in d: bits.append("unresolved")
+            hint = f" — _{', '.join(bits)}_" if bits else ""
+        rows.append(f"{icons.get(s, '⬜')} **{label}** · {desc}{hint}")
+    return "\n\n".join(rows)
+
+
+def stream_pipeline_events(api_url: str, pdf_path: str, max_retries: int):
+    """Open the API's SSE stream and yield (event, data) tuples."""
+    import requests
+    url = f"{api_url.rstrip('/')}/pipeline/stream"
+    resp = requests.get(url, params={"pdf": pdf_path, "max_retries": max_retries},
+                        stream=True, timeout=900)
+    resp.raise_for_status()
+    event, data_lines = None, []
+    for raw in resp.iter_lines(decode_unicode=True):
+        if raw is None:
+            continue
+        if raw == "":                       # blank line terminates one SSE frame
+            if event and data_lines:
+                yield event, json.loads("\n".join(data_lines))
+            event, data_lines = None, []
+        elif raw.startswith("event:"):
+            event = raw[len("event:"):].strip()
+        elif raw.startswith("data:"):
+            data_lines.append(raw[len("data:"):].strip())
+
+
+def run_streaming_pipeline(api_url: str, pdf_path: str, max_retries: int) -> dict | None:
+    """Consume the live SSE stream, render the stage tracker + flow graph as it
+    progresses, and return the hydrated final state (or None on error)."""
+    st.markdown("### 🔴 Live Pipeline Stream")
+    graph_box, list_box = st.columns([0.55, 0.45])
+    graph_ph = graph_box.empty()
+    list_ph = list_box.empty()
+
+    status: dict[str, str] = {n: "pending" for n, _, _ in PIPELINE_STAGES}
+    deltas: dict[str, dict] = {}
+
+    def _render():
+        graph_ph.graphviz_chart(_pipeline_dot(status), use_container_width=True)
+        list_ph.markdown(_stage_checklist_md(status, deltas))
+
+    _render()
+    final_state = None
+    try:
+        for event, data in stream_pipeline_events(api_url, pdf_path, max_retries):
+            if event == "start":
+                status["resolver"] = "active"
+            elif event == "stage":
+                node = data.get("node")
+                if node in status:
+                    status[node] = data.get("status", "done")
+                    if data.get("deltas"):
+                        deltas[node] = data["deltas"]
+            elif event == "done":
+                final_state = hydrate_state(data)
+            elif event == "error":
+                st.error(f"Pipeline error: {data.get('message')}")
+                return None
+            _render()
+    except Exception as e:
+        st.error(f"Could not reach the streaming API at {api_url}: {e}")
+        return None
+    return final_state
+
+
 # Sidebar layout
 st.sidebar.image("https://img.icons8.com/color/96/bullish.png", width=64)
 st.sidebar.markdown("# FinXtractor CLI Control")
 
-pdf_list = list(HIGH_FIDELITY_STATEMENTS.keys())
+# Scan for available PDFs dynamically
+pdf_dir = Path("data/reports")
+pdf_list = sorted([f.name for f in pdf_dir.glob("*.pdf")]) if pdf_dir.exists() else []
+if not pdf_list:
+    pdf_list = list(HIGH_FIDELITY_STATEMENTS.keys())
+
 selected_pdf = st.sidebar.selectbox("Select Target Annual Report", pdf_list)
 
 max_retries = st.sidebar.slider("LangGraph Max Retries", 1, 5, 2)
@@ -634,19 +889,60 @@ st.sidebar.markdown("---")
 
 # Execution Mode Selection
 st.sidebar.markdown("### Execution Backend")
-exec_mode = st.sidebar.radio("Method", ["Sandbox Cache (Immediate)", "Live Pipeline (Requires Ollama)"])
+exec_mode = st.sidebar.radio("Method", [
+    "Sandbox Cache (Immediate)",
+    "Live Pipeline (Streaming API)",
+    "Live Pipeline (Requires Ollama)",
+])
+
+if exec_mode == "Live Pipeline (Streaming API)":
+    api_url = st.sidebar.text_input("Pipeline API URL", value="http://localhost:8000")
+else:
+    api_url = "http://localhost:8000"
 
 run_pipeline_clicked = st.sidebar.button("⚡ Run Full Extraction Graph", use_container_width=True)
 
 # Try running active pipeline if clicked
-pipeline_results = None
 if run_pipeline_clicked:
     if exec_mode == "Sandbox Cache (Immediate)":
-        st.sidebar.success("Pipeline running skipped: sandbox cache loaded instantly!")
+        cached = load_cache(selected_pdf)
+        if cached:
+            st.session_state.pipeline_states[selected_pdf] = cached
+            st.sidebar.success("Pipeline running skipped: sandbox cache loaded instantly!")
+            st.rerun()
+        else:
+            st.sidebar.error("No cached extraction found for this PDF.")
+    elif exec_mode == "Live Pipeline (Streaming API)":
+        pdf_path = f"data/reports/{selected_pdf}"
+        if not Path(pdf_path).exists():
+            st.sidebar.error(f"PDF not found at {pdf_path}")
+        else:
+            final_state = run_streaming_pipeline(api_url, pdf_path, max_retries)
+            if final_state is not None:
+                active_state = {
+                    "pdf": final_state.get("pdf", pdf_path),
+                    "income_page": final_state.get("income_page"),
+                    "bs_page": final_state.get("bs_page"),
+                    "income_page_source": final_state.get("income_page_source"),
+                    "bs_page_source": final_state.get("bs_page_source"),
+                    "text_layer": final_state.get("text_layer", "ok"),
+                    "statement": final_state.get("statement"),
+                    "checks": final_state.get("checks", []),
+                    "confidences": final_state.get("confidences", []),
+                    "report": final_state.get("report"),
+                    "credit_report": final_state.get("credit_report"),
+                }
+                st.session_state.pipeline_states[selected_pdf] = active_state
+                if active_state["statement"] is not None:
+                    save_cache(selected_pdf, active_state)
+                st.session_state.last_run_success = True
+                st.session_state.last_run_route = final_state.get("route")
+                st.session_state.last_run_retries = final_state.get("retries", 0)
+                st.sidebar.success("Live pipeline stream finished!")
+                st.rerun()
     else:
         with st.sidebar.spinner("Running LangGraph Pipeline..."):
             try:
-                # Import graph here
                 from finxtractor.orchestration.graph import compiled_pipeline
                 import uuid
                 
@@ -654,7 +950,6 @@ if run_pipeline_clicked:
                 config = {"configurable": {"thread_id": str(uuid.uuid4())}}
                 pdf_path = f"data/reports/{selected_pdf}"
                 
-                # Check if file exists
                 if not Path(pdf_path).exists():
                     st.sidebar.error(f"PDF not found at {pdf_path}")
                 else:
@@ -666,25 +961,66 @@ if run_pipeline_clicked:
                         "max_retries": max_retries
                     }
                     final = graph.invoke(initial, config)
-                    pipeline_results = final
+                    
+                    active_state = {
+                        "pdf": pdf_path,
+                        "income_page": final.get("income_page"),
+                        "bs_page": final.get("bs_page"),
+                        "income_page_source": final.get("income_page_source"),
+                        "bs_page_source": final.get("bs_page_source"),
+                        "text_layer": final.get("text_layer", "ok"),
+                        "statement": final.get("statement"),
+                        "checks": final.get("checks", []),
+                        "confidences": final.get("confidences", []),
+                        "report": final.get("report"),
+                        "credit_report": final.get("credit_report")
+                    }
+                    st.session_state.pipeline_states[selected_pdf] = active_state
+                    save_cache(selected_pdf, active_state)
+                    
+                    st.session_state.last_run_success = True
+                    st.session_state.last_run_route = final.get("route")
+                    st.session_state.last_run_retries = final.get("retries", 0)
+                    
                     st.sidebar.success("Pipeline finished successfully!")
+                    st.rerun()
             except Exception as e:
                 st.sidebar.error(f"Pipeline Run Failed: {str(e)}")
-                st.sidebar.info("Falling back to Sandbox Cache (Offline Sandbox Mode)")
 
 # Initialize session state for statements if not present
-if "statements" not in st.session_state:
-    st.session_state.statements = {}
+if "pipeline_states" not in st.session_state:
+    st.session_state.pipeline_states = {}
 
 # Load baseline statement into session state if not already loaded
-if selected_pdf not in st.session_state.statements:
-    st.session_state.statements[selected_pdf] = dict_to_canonical(HIGH_FIDELITY_STATEMENTS[selected_pdf])
+if selected_pdf not in st.session_state.pipeline_states:
+    cached = load_cache(selected_pdf)
+    if cached is not None:
+        st.session_state.pipeline_states[selected_pdf] = cached
+    else:
+        st.session_state.pipeline_states[selected_pdf] = {
+            "pdf": f"data/reports/{selected_pdf}",
+            "income_page": None,
+            "bs_page": None,
+            "income_page_source": None,
+            "bs_page_source": None,
+            "text_layer": "ok",
+            "statement": None,
+            "checks": [],
+            "confidences": [],
+            "report": None,
+            "credit_report": None
+        }
 
-current_stmt = st.session_state.statements[selected_pdf]
+active_state = st.session_state.pipeline_states[selected_pdf]
+current_stmt = active_state.get("statement")
+
+if current_stmt is None:
+    st.warning("⚠️ No extraction results found for this PDF. Please run the LangGraph pipeline using the sidebar button to extract and normalize the statement data.")
+    st.stop()
 
 # Banner based on run mode
-if pipeline_results:
-    st.markdown(f'<div class="active-banner">🟢 <b>Connected Mode:</b> LangGraph pipeline executed successfully. Bounding boxes & values active. Route: {pipeline_results.get("route")} | Retries: {pipeline_results.get("retries")}</div>', unsafe_allow_html=True)
+if st.session_state.get("last_run_success"):
+    st.markdown(f'<div class="active-banner">🟢 <b>Connected Mode:</b> LangGraph pipeline executed successfully. Bounding boxes & values active. Route: {st.session_state.get("last_run_route")} | Retries: {st.session_state.get("last_run_retries")}</div>', unsafe_allow_html=True)
 else:
     st.markdown('<div class="sandbox-banner">🟡 <b>Sandbox Mode:</b> Running on high-fidelity cached statement data. Mathematical scoring, simulator, audits, and graph models are 100% active.</div>', unsafe_allow_html=True)
 
@@ -695,11 +1031,21 @@ with col_title:
     st.markdown(f"**Target Company annual report file:** `{selected_pdf}` | **Reporting Currency:** `{current_stmt.currency}` | **Current Year:** `{current_stmt.year_current}` | **Prior Year:** `{current_stmt.year_prior}`")
 
 # ----------------- LIVE METRICS COMPUTATION -----------------
-ratios = compute_ratios(current_stmt)
-altman = compute_altman(current_stmt)
-composite = compute_composite(ratios, altman)
-checks = run_all_checks(current_stmt)
-risk_flags = compute_risk(current_stmt, ratios, altman, checks)
+# Check if we have a pre-computed report from live pipeline run
+credit = active_state.get("credit_report")
+if credit:
+    ratios = credit.ratios
+    altman = credit.altman
+    composite = credit.composite
+    checks = active_state.get("checks", [])
+    risk_flags = credit.risk_flags
+else:
+    ratios = compute_ratios(current_stmt)
+    altman = compute_altman(current_stmt)
+    composite = compute_composite(ratios, altman)
+    checks = run_all_checks(current_stmt)
+    risk_flags = compute_risk(current_stmt, ratios, altman, checks)
+
 flagged_checks = sum(1 for c in checks if c.status.value == "fail")
 
 # ----------------- KPI BLOCK PANELS -----------------
@@ -717,7 +1063,7 @@ with kpi_col1:
 
 with kpi_col2:
     st.markdown(f"""
-    <div class="metric-card" style="border-left: 5px solid #6366f1;">
+    <div class="metric-card" style="border-left: 5px solid #3b82f6;">
         <span class="metric-label" style="font-size:1.1rem; color:#888;">Composite Score</span>
         <h2 style="font-size:3.5rem; margin:10px 0; color:#fff;">{float(composite.score_0_100 or 0):.1f}</h2>
         <span style="font-size:0.9rem; color:#888;">Scale: 0 - 100 (Weighted)</span>
@@ -779,7 +1125,6 @@ with tab_credit:
         
         st.markdown("### ⚖️ Score Contributions & Weights")
         weight_rows = []
-        # Weights hardcoded from E:\Projects_Work\FinXtractor\src\finxtractor\scoring\composite.py
         weights_map = {
             "altman_zscore": 0.30,
             "interest_coverage": 0.18,
@@ -805,7 +1150,6 @@ with tab_credit:
         $$Z'' = 6.56X_1 + 3.26X_2 + 6.72X_3 + 1.05X_4$$
         """)
         
-        # Altman Terms
         x1_val = float(altman.x1) if altman.x1 is not None else 0.0
         x2_val = float(altman.x2) if altman.x2 is not None else 0.0
         x3_val = float(altman.x3) if altman.x3 is not None else 0.0
@@ -828,8 +1172,6 @@ with tab_credit:
         """)
         
         st.markdown("### 🚨 Plain-English Credit Risk Alerts")
-        # Structured flags from the shared risk model (scoring/risk.py): threshold
-        # breaches, year-on-year deterioration, and data-quality issues.
         _SEV_ICON = {"high": "🚨", "medium": "⚠️", "low": "ℹ️"}
         if not risk_flags:
             st.success("✅ No major anomalous credit indicators or warning thresholds breached.")
@@ -837,6 +1179,34 @@ with tab_credit:
             for flag in risk_flags:
                 icon = _SEV_ICON.get(flag.severity.value, "⚠️")
                 st.markdown(f"{icon} **[{flag.category.value.replace('_', ' ').title()}]** {flag.message}")
+                
+    # Add scoring agent qualitative analyst narrative
+    if credit and credit.assessment:
+        st.markdown("---")
+        st.markdown("### 🧠 Qualitative Credit Analyst Narrative")
+        
+        rec = credit.assessment.recommendation.upper()
+        if "APPROVE" in rec or "LOW" in rec:
+            st.success(f"**Recommendation:** {rec}")
+        elif "MONITOR" in rec or "HOLD" in rec or "COVENANTS" in rec:
+            st.warning(f"**Recommendation:** {rec}")
+        else:
+            st.error(f"**Recommendation:** {rec}")
+            
+        st.markdown(f"**Summary:** {credit.assessment.summary}")
+        
+        c_drv, c_con = st.columns(2)
+        with c_drv:
+            st.markdown("#### 🟢 Key Drivers")
+            for d in credit.assessment.key_drivers:
+                st.markdown(f"- {d}")
+        with c_con:
+            st.markdown("#### 🔴 Critical Concerns")
+            for c in credit.assessment.concerns:
+                st.markdown(f"- {c}")
+                
+        if credit.assessment.outlook:
+            st.markdown(f"**Outlook:** {credit.assessment.outlook}")
 
 
 # ================= TAB 2: INTERACTIVE STATEMENTS & SIMULATOR =================
@@ -844,7 +1214,6 @@ with tab_stmts:
     st.markdown("## Interactive Financial Statements & Simulator")
     st.write("Below are the canonicalized account balances. You can **simulate value overrides** to perform what-if stress tests and instantly re-run the credit risk engine.")
     
-    # Render simulator inputs in columns
     st.markdown("### 🛠️ What-If Override Simulator")
     
     sim_col1, sim_col2, sim_col3 = st.columns(3)
@@ -873,7 +1242,6 @@ with tab_stmts:
         reset_stmt = st.button("Reset Statement to Baseline", use_container_width=True)
         
         if apply_overrides:
-            # Modify session state statement values
             for acct, val in [
                 (CanonicalAccount.REVENUE, sim_rev),
                 (CanonicalAccount.EBIT, sim_ebit),
@@ -890,11 +1258,17 @@ with tab_stmts:
                 line = current_stmt.get(acct)
                 if line:
                     line.value_current = Decimal(str(val))
+            active_state["credit_report"] = None
             st.success("Overrides applied! All panels, ratios, Altman scores, and validation checks updated.")
             st.rerun()
             
         if reset_stmt:
-            st.session_state.statements[selected_pdf] = dict_to_canonical(HIGH_FIDELITY_STATEMENTS[selected_pdf])
+            cache_file = Path("outputs") / f"{selected_pdf}.json"
+            if cache_file.exists():
+                cache_file.unlink()
+            initialize_default_caches()
+            if selected_pdf in st.session_state.pipeline_states:
+                del st.session_state.pipeline_states[selected_pdf]
             st.info("Statement reset to default baseline.")
             st.rerun()
 
@@ -963,33 +1337,70 @@ with tab_verification:
         else:
             st.info("No bounding box coordinates present. Coordinates are parsed and attached when invoking the live PDF extraction backend.")
 
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("### 🎯 Extraction Confidence Scores")
+    confidences = active_state.get("confidences", [])
+    if confidences:
+        conf_rows = []
+        for vc in confidences:
+            flag = "⚠️ Yes" if vc.flagged_for_review else "No"
+            conf_rows.append({
+                "Account": vc.account.replace("_", " ").title(),
+                "Confidence Score": f"{vc.score:.2f}",
+                "Source Tier": vc.extraction_source.upper(),
+                "Flagged for Review": flag,
+                "Reasons": ", ".join(vc.reasons)
+            })
+        st.dataframe(pd.DataFrame(conf_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("No confidence scores present. Confidence scores are calculated during live extraction.")
+
 
 # ================= TAB 4: NOTES KNOWLEDGE GRAPH =================
 with tab_graph:
     st.markdown("## Note Linking Knowledge Graph Explorer")
     st.write("Reconstructs the relationships between consolidated line items and detailed explanatory notes in the annual report.")
     
-    # Construct NetworkX Graph representation
-    G = nx.DiGraph()
+    # Try to load/reconstruct the real NetworkX graph from PDF if possible
+    pdf_path = active_state.get("pdf")
+    income_page = active_state.get("income_page")
+    bs_page = active_state.get("bs_page")
+    text_layer = active_state.get("text_layer", "ok")
     
-    # Build list of links
+    G = None
+    if pdf_path and income_page:
+        G = get_real_graph(pdf_path, income_page, bs_page, text_layer)
+        
     edges_list = []
-    for k, line in current_stmt.lines.items():
-        acct_node = k.replace("_", " ").title()
-        for nr in line.note_refs:
-            note_node = f"Note {nr.key()}"
-            G.add_edge(acct_node, note_node)
-            edges_list.append({
-                "Financial Statement Account": acct_node,
-                "Linked Note Identifier": note_node,
-                "Extraction Method": line.mapped_by.upper()
-            })
+    if G is not None:
+        # Build list of links from the real NetworkX graph!
+        for u, v, d in G.edges(data=True):
+            if d.get("rel") == "references-note":
+                acct_node = G.nodes[u].get("label", u)
+                note_node = f"Note {G.nodes[v].get('number', v)}"
+                sub_section = d.get("sub")
+                sub_str = f" ({sub_section})" if sub_section else ""
+                edges_list.append({
+                    "Financial Statement Account": acct_node,
+                    "Linked Note Identifier": f"{note_node}{sub_str}",
+                    "Extraction Method": G.nodes[u].get("account", "unmapped").upper()
+                })
+    else:
+        # Fallback to statement note references if no real graph could be built
+        for k, line in current_stmt.lines.items():
+            acct_node = k.replace("_", " ").title()
+            for nr in line.note_refs:
+                note_node = f"Note {nr.key()}"
+                edges_list.append({
+                    "Financial Statement Account": acct_node,
+                    "Linked Note Identifier": note_node,
+                    "Extraction Method": line.mapped_by.upper()
+                })
             
     if edges_list:
         st.markdown("### 🔗 Statement-to-Note Connections")
-        st.table(pd.DataFrame(edges_list))
+        st.dataframe(pd.DataFrame(edges_list), use_container_width=True, hide_index=True)
         
-        # Simple text representation of Graph Query
         st.markdown("### 🕸️ Graph Drill-Down Queries")
         
         unique_notes = sorted(list({e["Linked Note Identifier"] for e in edges_list}))
@@ -1001,26 +1412,43 @@ with tab_graph:
         for la in linking_accounts:
             st.markdown(f"- 📁 **{la}**")
             
-        # Draw mock Note Breakdown details if available
         st.markdown("---")
         st.markdown(f"### 📑 {selected_note} Breakdown Table")
         
-        if selected_note == "Note 3(d)" or selected_note == "Note 3":
-            note_breakdown = [
-                {"Description": "Interest income from loans", "Current Value ($)": "529,600,000", "Prior Value ($)": "473,200,000"},
-                {"Description": "Interest expense on deposits", "Current Value ($)": "-580,800,000", "Prior Value ($)": "-521,100,000"},
-                {"Description": "Net interest loss", "Current Value ($)": "-51,200,000", "Prior Value ($)": "-47,900,000"}
-            ]
-            st.table(pd.DataFrame(note_breakdown))
-        elif selected_note == "Note 4":
-            note_breakdown = [
-                {"Description": "Prima facie income tax credit", "Current Value ($)": "12,810,000", "Prior Value ($)": "8,280,000"},
-                {"Description": "Prior period tax adjustments", "Current Value ($)": "-410,000", "Prior Value ($)": "20,000"},
-                {"Description": "Total income tax benefit", "Current Value ($)": "12,400,000", "Prior Value ($)": "8,300,000"}
-            ]
-            st.table(pd.DataFrame(note_breakdown))
-        else:
-            st.info(f"Note breakdown tables for `{selected_note}` are stored in the memory graph and can be queried or expanded here.")
+        # Real Note Breakdown Table rendering from the real NetworkX graph
+        has_real_breakdown = False
+        if G is not None:
+            import re
+            note_match = re.search(r"Note (\d+)", selected_note)
+            if note_match:
+                note_num = int(note_match.group(1))
+                nid = f"note:{note_num}"
+                if nid in G:
+                    sub_rows = [G.nodes[s]["row"] for _, s, e in G.out_edges(nid, data=True)
+                                if e["rel"] == "has-sub-item"]
+                    if sub_rows:
+                        df_rows = pd.DataFrame(sub_rows)
+                        st.dataframe(df_rows, use_container_width=True, hide_index=True)
+                        has_real_breakdown = True
+        
+        # Fallback to static sample note breakdowns if the real graph is not built or note page isn't located
+        if not has_real_breakdown:
+            if selected_note == "Note 3(d)" or selected_note == "Note 3":
+                note_breakdown = [
+                    {"Description": "Interest income from loans", "Current Value ($)": "529,600,000", "Prior Value ($)": "473,200,000"},
+                    {"Description": "Interest expense on deposits", "Current Value ($)": "-580,800,000", "Prior Value ($)": "-521,100,000"},
+                    {"Description": "Net interest loss", "Current Value ($)": "-51,200,000", "Prior Value ($)": "-47,900,000"}
+                ]
+                st.table(pd.DataFrame(note_breakdown))
+            elif selected_note == "Note 4":
+                note_breakdown = [
+                    {"Description": "Prima facie income tax credit", "Current Value ($)": "12,810,000", "Prior Value ($)": "8,280,000"},
+                    {"Description": "Prior period tax adjustments", "Current Value ($)": "-410,000", "Prior Value ($)": "20,000"},
+                    {"Description": "Total income tax benefit", "Current Value ($)": "12,400,000", "Prior Value ($)": "8,300,000"}
+                ]
+                st.table(pd.DataFrame(note_breakdown))
+            else:
+                st.info(f"Note breakdown tables for `{selected_note}` are stored in the memory graph and can be queried or expanded here.")
             
     else:
         st.info("No statement-to-note linking relations resolved for this document. Note-linker links note reference indices (e.g. Note 3, Note 4) to statement figures.")

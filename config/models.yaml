@@ -18,7 +18,7 @@ table_extraction:
   active: docling
   providers:
     docling:
-      mode: ACCURATE          # ACCURATE | FAST  (Docling TableFormer)
+      mode: FAST          # ACCURATE | FAST  (Docling TableFormer)
       do_ocr: false           # text-based reports; OCR off for speed
 
 # PDF reader (page text, outline, rasterization). Swappable like the sections

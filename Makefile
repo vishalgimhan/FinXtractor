@@ -9,7 +9,15 @@ run:
 eval:
 	@echo "eval: not implemented yet (Phase 5)"
 
-demo:
-	@echo "demo: not implemented yet (Phase 7)"
+dashboard:
+	poetry run streamlit run src/finxtractor/dashboard.py
 
-.PHONY: setup run eval demo
+api:
+	poetry run uvicorn api.main:app --reload
+
+start:
+	poetry run finxtractor start
+
+demo: dashboard
+
+.PHONY: setup run eval demo dashboard api start
