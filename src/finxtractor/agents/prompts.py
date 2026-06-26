@@ -109,6 +109,37 @@ def resolver_user_prompt(pdf_name: str, income_override: int | None,
     return "\n".join(lines)
 
 
+def analyst_system_prompt() -> str:
+    """System prompt for the scoring (analyst) agent: interpret the already-
+    computed credit metrics into a grounded narrative assessment."""
+    return (
+        "You are a credit analyst. The financial ratios, Altman Z''-score, "
+        "composite score, and risk flags have ALREADY been computed for you — "
+        "your job is to INTERPRET them, not to recompute or invent any number.\n\n"
+        "Use the tools to inspect the figures: get_composite and get_altman for "
+        "the headline, get_ratios for the drivers, list_risk_flags (filter by "
+        "severity) for the material risks. For any concern you raise, call "
+        "trace_ratio to ground it in the source — cite the PDF page and the raw "
+        "line label the figure came from (e.g. 'net loss on page 8').\n\n"
+        "Then return a structured assessment: a concise summary, the key drivers "
+        "(positive and negative), the main concerns (with page citations where "
+        "possible), a short outlook, and a clear recommendation (e.g. 'approve "
+        "with covenants', 'monitor', 'decline'). Be factual and specific; quote "
+        "only figures the tools returned."
+    )
+
+
+def analyst_user_prompt(source_pdf: str, year, score, grade) -> str:
+    """Per-run request for the scoring (analyst) agent."""
+    fy = f" (FY {year})" if year else ""
+    head = (f"composite score {score} / grade {grade}"
+            if score is not None else "composite score unavailable")
+    return (f"Assess the creditworthiness of {source_pdf}{fy}. Headline: {head}.\n"
+            "Inspect the ratios, Altman result, and risk flags via the tools, "
+            "trace your key concerns to their source pages, then return the "
+            "structured assessment.")
+
+
 def extractor_system_prompt() -> str:
     """System prompt for the extractor agent: drives the per-page extraction
     ladder and normalization, leaving unreadable pages for the vision tier."""

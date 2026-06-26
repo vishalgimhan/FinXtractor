@@ -69,6 +69,17 @@ class RiskFlag(BaseModel):
     prior_value: Optional[Decimal] = None      # prior-year value (trend flags)
 
 
+class CreditAssessment(BaseModel):
+    """Analyst narrative over the computed metrics — written by the scoring agent,
+    grounded in the ratios/flags/provenance it inspected. Interpretation only; the
+    numbers it cites are produced deterministically."""
+    summary: str                               # 2-3 sentence overall credit view
+    key_drivers: list[str] = Field(default_factory=list)   # main positive/negative factors
+    concerns: list[str] = Field(default_factory=list)      # material risks (cite source pages)
+    outlook: str = ""                          # trend / forward-looking view
+    recommendation: str = ""                   # e.g. "approve with covenants" | "monitor" | "decline"
+
+
 class CreditReport(BaseModel):
     source_pdf: str
     year: Optional[int] = None
@@ -76,3 +87,4 @@ class CreditReport(BaseModel):
     altman: Optional[AltmanResult] = None
     composite: Optional[CompositeScore] = None
     risk_flags: list[RiskFlag] = Field(default_factory=list)
+    assessment: Optional[CreditAssessment] = None   # analyst narrative (scoring agent; optional)

@@ -1,6 +1,7 @@
 from .state import PipelineState
 from ..agents.resolver import resolve
 from ..agents.extractor import extract
+from ..agents.analyst import assess
 from ..validate.checks import run_all_checks
 from ..validate.confidence import score_statement
 from ..validate.hitl import build_report
@@ -59,9 +60,12 @@ def hitl_node(state: PipelineState) -> dict:
     # In production: interrupt() here to pause for a real reviewer and resume on input.
     return {"route": "hitl", "report": report, "confidences": report.confidences}
 
-def scoring_node(state: PipelineState) -> dict:
-    """Compute ratios, Altman Z'', the composite credit score, and structured
-    risk flags (threshold breaches, YoY deterioration, data quality). (Scoring.)"""
+def scoring_agent(state: PipelineState) -> dict:
+    """Compute ratios, Altman Z'', the composite credit score, and structured risk
+    flags deterministically, then attach an analyst narrative written by the
+    scoring agent — an LLM that interprets (never recomputes) the metrics and
+    grounds its concerns in provenance. The narrative is best-effort: if the LLM
+    tier is down the report stands without it. (Scoring.)"""
     stmt = state["statement"]
     ratios = compute_ratios(stmt)
     altman = compute_altman(stmt)
@@ -70,5 +74,6 @@ def scoring_node(state: PipelineState) -> dict:
     credit = CreditReport(source_pdf=stmt.source_pdf, year=stmt.year_current,
                           ratios=ratios, altman=altman, composite=composite,
                           risk_flags=risk_flags)
+    credit.assessment = assess(credit, stmt)        # additive analyst narrative
     return {"route": "scoring", "credit_report": credit}
 

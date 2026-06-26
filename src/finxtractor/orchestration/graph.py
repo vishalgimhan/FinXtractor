@@ -2,7 +2,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import InMemorySaver
 
 from .state import PipelineState
-from .nodes import resolver_agent, extractor_agent, validator_node, retry_node, hitl_node, scoring_node
+from .nodes import resolver_agent, extractor_agent, validator_node, retry_node, hitl_node, scoring_agent
 from .vlm_node import vlm_node
 from .router import (
     route_after_resolver, route_after_vlm, route_after_extractor, route_after_validation,
@@ -18,7 +18,7 @@ def build_pipeline() -> StateGraph:
     g.add_node("validator", validator_node)
     g.add_node("retry", retry_node)
     g.add_node("hitl", hitl_node)
-    g.add_node("scoring", scoring_node)
+    g.add_node("scoring", scoring_agent)
 
     g.add_edge(START, "resolver")           # entry: locate the statement pages
     g.add_conditional_edges(                # located -> extract; still missing -> vlm; else HITL
