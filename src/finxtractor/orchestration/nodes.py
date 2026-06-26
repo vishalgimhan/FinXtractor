@@ -3,10 +3,10 @@ from pathlib import Path
 from loguru import logger
 
 from .state import PipelineState
-from ..parsing.routing import resolve_page, page_from_outline, INCOME_MARKERS, BALANCE_SHEET_MARKERS
+from ..parsing.routing import resolve_page, INCOME_MARKERS, BALANCE_SHEET_MARKERS
 from ..parsing.text import extract_pages, assess_text_layer
 from ..services.pdf_reader import get_pdf_reader
-from ..agents.toc import get_structured_toc
+from ..agents.toc import build_page_index
 from ..agents.page_locator import locate_scanned
 from ..parsing.statements import extract_canonical
 from ..normalize.normalize import merge
@@ -17,32 +17,33 @@ from ..validate.results import CheckResult, CheckStatus, ValidationReport
 from ..scoring.ratios import compute_ratios
 from ..scoring.altman import compute_altman
 from ..scoring.composite import compute_composite
+from ..scoring.risk import compute_risk
 from ..scoring.schemas import CreditReport
 
 def resolver_node(state: PipelineState) -> dict:
     """Locate the statement pages. Precedence per page: explicit override ->
-    agentic structured TOC (LLM) -> deterministic TOC/outline/heuristic. The
-    structured TOC is parsed once and carried in state for reuse. (Resolver.)"""
+    unified page index (agentic TOC + embedded outline) -> deterministic
+    printed-TOC/heuristic. The page index is built once and carried in state
+    for reuse. (Resolver.)"""
     pdf = Path(state["pdf"])
     pages = extract_pages(pdf)                 # one text read
-    embedded_outline = get_pdf_reader().outline(pdf)  # one bookmark read, reused per kind
+    embedded_outline = get_pdf_reader().outline(pdf)  # one bookmark read, reused below
     layer = assess_text_layer(pages)
-    toc = get_structured_toc(pages)       # agentic; built from pages, held in state below
+    # Unify the two title->page sources (agentic TOC + outline) into one index.
+    # On a scan there's no contents text, so it naturally holds outline entries only.
+    index = build_page_index(pdf, pages, outline=embedded_outline)
     logger.info("Triage for {}: text_layer={}", pdf.name, layer)
 
     def locate(override, markers):
-        """override -> agentic TOC -> deterministic (text). None if all miss."""
+        """override -> unified page index -> deterministic (text only). None if all miss."""
         if override is not None:
             return override, "override"
-        if toc is not None:
-            p = toc.resolve(markers)
-            if p is not None and 1 <= p <= len(pages):
-                return p, "agentic_toc"
-        if layer != "none":               # text-based tiers are pointless on a scan
+        p, source = index.resolve(markers)
+        if p is not None and 1 <= p <= len(pages):
+            return p, source
+        if layer != "none":               # printed-TOC + heuristic are pointless on a scan
             return resolve_page(pdf, pages, markers, outline=embedded_outline)
-        # scanned: text tiers can't help, but bookmarks may still exist
-        p = page_from_outline(pdf, markers, outline=embedded_outline)
-        return (p, "outline") if p is not None else (None, None)
+        return None, None
 
     ip, ip_source = locate(state.get("income_page"), INCOME_MARKERS)
     bsp, bsp_source = locate(state.get("bs_page"), BALANCE_SHEET_MARKERS)
@@ -65,14 +66,14 @@ def resolver_node(state: PipelineState) -> dict:
         # Graceful: no crash. Route to HITL with a clear, inspectable reason.
         msg = f"Could not locate an income-statement page in {pdf.name} (text_layer={layer})"
         logger.warning(msg)
-        return {"income_page": None, "text_layer": layer, "toc": toc,
+        return {"income_page": None, "text_layer": layer, "page_index": index,
                 "resolution_error": msg, "route": "unresolved"}
 
     logger.info("Resolved pages for {}: income={} ({}), balance={} ({})",
                 pdf.name, ip, ip_source, bsp, bsp_source)
     return {"income_page": ip, "bs_page": bsp,
             "income_page_source": ip_source, "bs_page_source": bsp_source,
-            "text_layer": layer, "toc": toc, "route": "resolved"}
+            "text_layer": layer, "page_index": index, "route": "resolved"}
 
 def extractor_node(state: PipelineState) -> dict:
     """Extract income (+ balance sheet, if located) to canonical and merge.
@@ -116,12 +117,15 @@ def hitl_node(state: PipelineState) -> dict:
     return {"route": "hitl", "report": report, "confidences": report.confidences}
 
 def scoring_node(state: PipelineState) -> dict:
-    """Compute ratios, Altman Z'', and the composite credit score. (Scoring.)"""
+    """Compute ratios, Altman Z'', the composite credit score, and structured
+    risk flags (threshold breaches, YoY deterioration, data quality). (Scoring.)"""
     stmt = state["statement"]
     ratios = compute_ratios(stmt)
     altman = compute_altman(stmt)
     composite = compute_composite(ratios, altman)
+    risk_flags = compute_risk(stmt, ratios, altman, state.get("checks"))
     credit = CreditReport(source_pdf=stmt.source_pdf, year=stmt.year_current,
-                          ratios=ratios, altman=altman, composite=composite)
+                          ratios=ratios, altman=altman, composite=composite,
+                          risk_flags=risk_flags)
     return {"route": "scoring", "credit_report": credit}
 

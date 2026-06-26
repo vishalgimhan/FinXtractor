@@ -8,6 +8,7 @@ from collections import Counter
 from pathlib import Path
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from ..config import get_markers, get_pattern
 from ..services.pdf_reader import get_pdf_reader
@@ -22,6 +23,37 @@ _STANDALONE_INT = get_pattern("standalone_int")
 def _matches(text: str, markers: list[str]) -> bool:
     low = text.lower()
     return any(m in low for m in markers)
+
+
+# --- unified title -> physical-page index -----------------------------------
+
+class LocatedEntry(BaseModel):
+    title: str
+    page: int                       # 1-based physical page
+    source: str                     # "agentic_toc" | "outline"
+
+
+class PageIndex(BaseModel):
+    """One title->physical-page map, merged from every location source (embedded
+    outline + agentic TOC). Entries are pre-ordered by source priority, so the
+    first marker match wins. Built once and carried in pipeline state."""
+    entries: list[LocatedEntry] = Field(default_factory=list)
+
+    def resolve(self, markers: list[str]) -> tuple[int | None, str | None]:
+        """First entry whose title matches any marker -> (physical page, source)."""
+        low = [m.lower() for m in markers]
+        for e in self.entries:
+            if any(m in e.title.lower() for m in low):
+                return e.page, e.source
+        return None, None
+
+
+def entries_from_outline(
+    outline: list[tuple[int, str, int]]
+) -> list[LocatedEntry]:
+    """Embedded-outline bookmarks as index entries (titles already physical)."""
+    return [LocatedEntry(title=title, page=page, source="outline")
+            for _level, title, page in outline if page >= 1]
 
 
 # --- embedded outline -------------------------------------------------------

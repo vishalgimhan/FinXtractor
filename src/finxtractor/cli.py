@@ -178,12 +178,12 @@ def pipeline(
 
 @app.command("run-all")
 def run_all(max_retries: int = typer.Option(2, "--max-retries")):
-    """Run all four reports through the pipeline. Edit the specs to match your files."""
+    """Run all sample reports through the pipeline. Pages auto-resolve (resolver node)."""
     specs = [
-        DocSpec("data/reports/report1.pdf", income_page=__, bs_page=__),
-        DocSpec("data/reports/report2.pdf", income_page=__, bs_page=__),
-        DocSpec("data/reports/report3.pdf", income_page=__, bs_page=__),
-        DocSpec("data/reports/report4.pdf", income_page=__, bs_page=__),
+        DocSpec("data/reports/AUSNET PTY LTD.pdf"),
+        DocSpec("data/reports/B & E FOODS PTY LTD.pdf"),
+        DocSpec("data/reports/CITIGROUP.pdf"),
+        DocSpec("data/reports/YHI PTY LTD.pdf"),
     ]
     logger.info("Running batch pipeline for {} document(s) with max_retries={}", len(specs), max_retries)
     results = orchestrate(specs, max_retries)

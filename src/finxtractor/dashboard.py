@@ -13,6 +13,7 @@ from finxtractor.schemas.statement import Provenance, Units
 from finxtractor.scoring.ratios import compute_ratios
 from finxtractor.scoring.altman import compute_altman
 from finxtractor.scoring.composite import compute_composite
+from finxtractor.scoring.risk import compute_risk
 from finxtractor.scoring.schemas import Zone
 from finxtractor.validate.checks import run_all_checks
 from finxtractor.validate.confidence import score_statement
@@ -698,6 +699,7 @@ ratios = compute_ratios(current_stmt)
 altman = compute_altman(current_stmt)
 composite = compute_composite(ratios, altman)
 checks = run_all_checks(current_stmt)
+risk_flags = compute_risk(current_stmt, ratios, altman, checks)
 flagged_checks = sum(1 for c in checks if c.status.value == "fail")
 
 # ----------------- KPI BLOCK PANELS -----------------
@@ -826,39 +828,15 @@ with tab_credit:
         """)
         
         st.markdown("### 🚨 Plain-English Credit Risk Alerts")
-        anomalies = []
-        
-        # Check Net Profit Margin
-        npm = next((r.value for r in ratios if r.name == "net_profit_margin"), None)
-        if npm is not None and npm < 0:
-            anomalies.append(f"⚠️ **Negative Profit Margin ({float(npm)*100:.1f}%):** Company is operating at a net loss in the current period.")
-            
-        # Check Current Ratio
-        cr = next((r.value for r in ratios if r.name == "current_ratio"), None)
-        if cr is not None and cr < 1.0:
-            anomalies.append(f"⚠️ **Weak Current Ratio ({float(cr):.2f}):** Current liabilities exceed current assets, indicating liquidity pressure.")
-            
-        # Check Interest Coverage
-        ic = next((r.value for r in ratios if r.name == "interest_coverage"), None)
-        if ic is not None and ic < 1.5:
-            anomalies.append(f"⚠️ **Fragile Interest Coverage ({float(ic):.2f}x):** EBIT is insufficient to comfortably service finance interest expenses.")
-            
-        # Check Debt to Equity
-        de = next((r.value for r in ratios if r.name == "debt_to_equity"), None)
-        if de is not None and de > 2.0:
-            anomalies.append(f"⚠️ **High Debt-to-Equity Ratio ({float(de):.2f}):** Highly leveraged capital structure, exposing the company to interest rate vulnerability.")
-            
-        # Altman zone checks
-        if altman.zone == Zone.DISTRESS:
-            anomalies.append("🚨 **ALTMAN DISTRESS ZONE:** Overall insolvency risk indicator is highly elevated. Restructuring or credit limits advised.")
-        elif altman.zone == Zone.GREY:
-            anomalies.append("⚠️ **ALTMAN GREY ZONE:** The risk metrics indicate unstable positioning, warranting close tracking.")
-            
-        if not anomalies:
+        # Structured flags from the shared risk model (scoring/risk.py): threshold
+        # breaches, year-on-year deterioration, and data-quality issues.
+        _SEV_ICON = {"high": "🚨", "medium": "⚠️", "low": "ℹ️"}
+        if not risk_flags:
             st.success("✅ No major anomalous credit indicators or warning thresholds breached.")
         else:
-            for anomaly in anomalies:
-                st.markdown(anomaly)
+            for flag in risk_flags:
+                icon = _SEV_ICON.get(flag.severity.value, "⚠️")
+                st.markdown(f"{icon} **[{flag.category.value.replace('_', ' ').title()}]** {flag.message}")
 
 
 # ================= TAB 2: INTERACTIVE STATEMENTS & SIMULATOR =================

@@ -42,9 +42,37 @@ class CompositeScore(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class RiskSeverity(str, Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class RiskCategory(str, Enum):
+    PROFITABILITY = "profitability"
+    LIQUIDITY = "liquidity"
+    LEVERAGE = "leverage"
+    COVERAGE = "coverage"
+    SOLVENCY = "solvency"           # Altman zone
+    TREND = "trend"                 # year-on-year deterioration
+    DATA_QUALITY = "data_quality"   # failed cross-foot / validation checks
+
+
+class RiskFlag(BaseModel):
+    """One material risk or anomaly, for the structured per-company risk report."""
+    code: str                                  # stable machine code, e.g. "negative_margin"
+    category: RiskCategory
+    severity: RiskSeverity
+    message: str                               # plain-English, analyst-readable
+    metric: Optional[str] = None               # ratio/account/check involved
+    value: Optional[Decimal] = None            # current value that triggered the flag
+    prior_value: Optional[Decimal] = None      # prior-year value (trend flags)
+
+
 class CreditReport(BaseModel):
     source_pdf: str
     year: Optional[int] = None
     ratios: list[Ratio] = Field(default_factory=list)
     altman: Optional[AltmanResult] = None
     composite: Optional[CompositeScore] = None
+    risk_flags: list[RiskFlag] = Field(default_factory=list)

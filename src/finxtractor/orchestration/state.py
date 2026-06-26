@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Optional, TypedDict
 from ..schemas.canonical import CanonicalStatement
 from ..validate.results import CheckResult, ValueConfidence, ValidationReport
-from ..agents.toc import StructuredToc
+from ..parsing.outline import PageIndex
 from ..scoring.schemas import CreditReport
 
 
@@ -16,7 +16,7 @@ class PipelineState(TypedDict, total=False):
     bs_page_source: str
     text_layer: str                 # "ok" | "sparse" | "none" (scanned) -> drives OCR/VLM routing
     resolution_error: Optional[str] # set when no statement page could be located
-    toc: Optional[StructuredToc]     # agentic structured contents page, reusable for note pages
+    page_index: Optional[PageIndex]  # unified title->page index (agentic TOC + outline)
     statement: Optional[CanonicalStatement]
     checks: list[CheckResult]
     confidences: list[ValueConfidence]

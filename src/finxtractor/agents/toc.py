@@ -13,8 +13,14 @@ from __future__ import annotations
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from pathlib import Path
+
 from ..parsing.text import Page
-from ..parsing.outline import find_contents_page, printed_page_offset
+from ..parsing.outline import (
+    find_contents_page, printed_page_offset, entries_from_outline,
+    LocatedEntry, PageIndex,
+)
+from ..services.pdf_reader import get_pdf_reader
 from .prompts import toc_extraction_prompt
 
 
@@ -70,3 +76,27 @@ def get_structured_toc(pages: list[Page]) -> StructuredToc | None:
     offset = printed_page_offset(pages) or 0
     logger.info("Structured TOC via agent: {} entries, offset {}", len(entries), offset)
     return StructuredToc(entries=entries, page_offset=offset)
+
+
+def _agentic_entries(pages: list[Page]) -> list[LocatedEntry]:
+    """Agentic TOC entries as physical-page index entries, or [] if unavailable."""
+    toc = get_structured_toc(pages)
+    if toc is None:
+        return []
+    return [LocatedEntry(title=e.title, page=e.page + toc.page_offset, source="agentic_toc")
+            for e in toc.entries]
+
+
+def build_page_index(pdf: Path | str, pages: list[Page], *,
+                     outline: list[tuple[int, str, int]] | None = None) -> PageIndex:
+    """Unify the two title->page sources into one index: agentic TOC first
+    (printed contents page, via the LLM), then the embedded outline (bookmarks).
+    Agentic entries are listed first so they win on a marker tie, preserving the
+    resolver's historical precedence. Either source may be empty (no contents
+    page / LLM down / no bookmarks); the deterministic printed-TOC and heuristic
+    tiers remain the resolver's lower fallback."""
+    if outline is None:
+        outline = get_pdf_reader().outline(pdf)
+    entries = _agentic_entries(pages) + entries_from_outline(outline)
+    logger.info("Page index for {}: {} entr(ies)", Path(pdf).name, len(entries))
+    return PageIndex(entries=entries)
